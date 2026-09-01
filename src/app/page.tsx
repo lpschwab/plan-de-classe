@@ -44,6 +44,7 @@ type Projet = {
   modeSalle?: ModeSalle;
   grilleSuiviActive?: boolean;
   nombreCasesSuivi?: number;
+  binomesMixtesActifs?: boolean;
   dateModification: string;
 };
 
@@ -784,10 +785,9 @@ function trouverBinomes(places: Place[]): Place[][] {
     for (let j = i + 1; j < places.length; j++) {
       const mesure = distanceEntreTables(places[i], places[j]);
 
-      // Les binômes mixtes correspondent à des tables réellement côte à côte
-      // sur une même rangée. On exclut donc les voisinages verticaux : auparavant,
-      // certaines dispositions pouvaient considérer deux élèves l'un derrière
-      // l'autre comme un binôme.
+      // Pour l'alternance fille / garçon, chaque voisinage horizontal compte.
+      // Sur une rangée de 3 tables, on évalue donc 1-2 ET 2-3 ; sur 4 tables,
+      // 1-2, 2-3 et 3-4. On ne découpe plus la rangée en binômes disjoints.
       if (memeLigne(places[i], places[j]) && mesure.distance <= 1.25) {
         candidats.push({
           place1: places[i],
@@ -799,29 +799,16 @@ function trouverBinomes(places: Place[]): Place[][] {
   }
 
   candidats.sort(function (a, b) {
-    return a.distance - b.distance;
-  });
-
-  const utilisees = new Set<number>();
-
-  const binomes: Place[][] = [];
-
-  candidats.forEach(function (candidat) {
-    if (
-      utilisees.has(candidat.place1.id) ||
-      utilisees.has(candidat.place2.id)
-    ) {
-      return;
+    if (Math.abs(a.place1.y - b.place1.y) > 0.5) {
+      return a.place1.y - b.place1.y;
     }
 
-    utilisees.add(candidat.place1.id);
-
-    utilisees.add(candidat.place2.id);
-
-    binomes.push([candidat.place1, candidat.place2]);
+    return Math.min(a.place1.x, a.place2.x) - Math.min(b.place1.x, b.place2.x);
   });
 
-  return binomes;
+  return candidats.map(function (candidat) {
+    return [candidat.place1, candidat.place2];
+  });
 }
 
 function calculerScoreBinomes(eleves: Eleve[], places: Place[]): ScoreBinomes {
@@ -831,24 +818,37 @@ function calculerScoreBinomes(eleves: Eleve[], places: Place[]): ScoreBinomes {
     elevesParId.set(eleve.id, eleve);
   });
 
-  const binomes = trouverBinomes(places);
+  const voisinages = trouverBinomes(places);
 
   let mixtes = 0;
+  let possibles = 0;
 
-  binomes.forEach(function (binome) {
+  voisinages.forEach(function (voisinage) {
     const eleve1 =
-      binome[0].eleveId === null
+      voisinage[0].eleveId === null
         ? null
-        : (elevesParId.get(binome[0].eleveId) ?? null);
+        : (elevesParId.get(voisinage[0].eleveId) ?? null);
 
     const eleve2 =
-      binome[1].eleveId === null
+      voisinage[1].eleveId === null
         ? null
-        : (elevesParId.get(binome[1].eleveId) ?? null);
+        : (elevesParId.get(voisinage[1].eleveId) ?? null);
 
     if (!eleve1 || !eleve2) {
       return;
     }
+
+    // On ne compte dans l'indicateur que les voisinages pour lesquels le sexe
+    // est renseigné. Ainsi 3 tables occupées peuvent afficher 2/2, et 4 tables
+    // occupées 3/3 lorsque l'alternance est parfaite.
+    const sexe1Connu = estFille(eleve1) || estGarcon(eleve1);
+    const sexe2Connu = estFille(eleve2) || estGarcon(eleve2);
+
+    if (!sexe1Connu || !sexe2Connu) {
+      return;
+    }
+
+    possibles++;
 
     if (
       (estFille(eleve1) && estGarcon(eleve2)) ||
@@ -857,36 +857,6 @@ function calculerScoreBinomes(eleves: Eleve[], places: Place[]): ScoreBinomes {
       mixtes++;
     }
   });
-
-  // L'objectif doit refléter le plan réellement occupé, pas toutes les
-  // tables disponibles dans la salle. Sinon l'indicateur pouvait annoncer
-  // artificiellement qu'il manquait des binômes mixtes à cause de places vides.
-  const elevesPlaces = new Set<number>();
-  let binomesOccupes = 0;
-
-  binomes.forEach(function (binome) {
-    if (binome[0].eleveId !== null) {
-      elevesPlaces.add(binome[0].eleveId);
-    }
-
-    if (binome[1].eleveId !== null) {
-      elevesPlaces.add(binome[1].eleveId);
-    }
-
-    if (binome[0].eleveId !== null && binome[1].eleveId !== null) {
-      binomesOccupes++;
-    }
-  });
-
-  const elevesEffectivementPlaces = eleves.filter(function (eleve) {
-    return elevesPlaces.has(eleve.id);
-  });
-
-  const possibles = Math.min(
-    elevesEffectivementPlaces.filter(estFille).length,
-    elevesEffectivementPlaces.filter(estGarcon).length,
-    binomesOccupes,
-  );
 
   return {
     mixtes,
@@ -1042,44 +1012,11 @@ function choisirPlacesActivesVersAvant(
     }),
   );
 
-  // Pour préserver de vrais binômes côte à côte, on sélectionne d'abord les
-  // places par paires complètes, de l'avant vers le fond. Cela évite par exemple
-  // de prendre deux demi-binômes au centre d'une rangée lorsqu'il ne reste que
-  // deux élèves à placer.
-  const binomes = trouverBinomes(places).sort(function (a, b) {
-    const yA = (a[0].y + a[1].y) / 2;
-    const yB = (b[0].y + b[1].y) / 2;
-
-    if (Math.abs(yA - yB) > 0.5) {
-      return yA - yB;
-    }
-
-    const centreA = (a[0].x + a[1].x) / 2;
-    const centreB = (b[0].x + b[1].x) / 2;
-
-    return Math.abs(centreA - 50) - Math.abs(centreB - 50);
-  });
-
-  binomes.forEach(function (binome) {
-    if (idsActifs.size >= nombreAPlacer) {
-      return;
-    }
-
-    const aAjouter = binome.filter(function (place) {
-      return !idsActifs.has(place.id);
-    });
-
-    const placesRestantes = nombreAPlacer - idsActifs.size;
-
-    if (aAjouter.length <= placesRestantes) {
-      aAjouter.forEach(function (place) {
-        idsActifs.add(place.id);
-      });
-    }
-  });
-
-  // S'il reste un nombre impair d'élèves, ou une place verrouillée isolée,
-  // on complète ensuite avec les meilleures places individuelles.
+  // On ne réserve plus les places par paires. Cette ancienne logique pouvait
+  // laisser volontairement une table vide au milieu d'un bloc de 3 tables.
+  // Désormais on remplit simplement les meilleures places, de l'avant vers le
+  // fond, en privilégiant les tables centrales d'une même rangée. L'alternance
+  // fille / garçon est gérée ensuite, sans créer de trous artificiels.
   const restantes = places
     .filter(function (place) {
       return !idsActifs.has(place.id);
@@ -1101,13 +1038,16 @@ function choisirPlacesActivesVersAvant(
   return idsActifs;
 }
 
-function genererPlanMixte(eleves: Eleve[], places: Place[]): Place[] {
+function genererPlanMixte(
+  eleves: Eleve[],
+  places: Place[],
+  binomesMixtesActifs: boolean,
+): Place[] {
   const placesActives = choisirPlacesActivesVersAvant(eleves, places);
 
   const nouvellesPlaces = places.map(function (place) {
     return {
       ...place,
-
       eleveId: place.verrouillee ? place.eleveId : null,
     };
   });
@@ -1118,10 +1058,34 @@ function genererPlanMixte(eleves: Eleve[], places: Place[]): Place[] {
     return !elevesVerrouilles.has(eleve.id);
   });
 
+  // Sans règle mixte, on conserve un placement aléatoire qui laisse ensuite
+  // l'optimiseur choisir le meilleur candidat pour les autres contraintes.
+  if (!binomesMixtesActifs) {
+    const melanges = melangerTableau(disponibles);
+    const placesDisponibles = nouvellesPlaces
+      .filter(function (place) {
+        return placesActives.has(place.id) && place.eleveId === null;
+      })
+      .sort(function (a, b) {
+        if (Math.abs(a.y - b.y) > 0.5) {
+          return a.y - b.y;
+        }
+
+        return a.x - b.x;
+      });
+
+    placesDisponibles.forEach(function (place, index) {
+      const eleve = melanges[index];
+      if (eleve) {
+        place.eleveId = eleve.id;
+      }
+    });
+
+    return nouvellesPlaces;
+  }
+
   const filles = melangerTableau(disponibles.filter(estFille));
-
   const garcons = melangerTableau(disponibles.filter(estGarcon));
-
   const autres = melangerTableau(
     disponibles.filter(function (eleve) {
       return !estFille(eleve) && !estGarcon(eleve);
@@ -1129,132 +1093,161 @@ function genererPlanMixte(eleves: Eleve[], places: Place[]): Place[] {
   );
 
   const elevesParId = new Map<number, Eleve>();
-
   eleves.forEach(function (eleve) {
     elevesParId.set(eleve.id, eleve);
   });
 
-  function retirerAleatoire(): Eleve | null {
-    const tous = [...filles, ...garcons, ...autres];
+  function retirerDeListe(liste: Eleve[]): Eleve | null {
+    return liste.shift() ?? null;
+  }
 
-    if (tous.length === 0) {
+  function retirerNimporteLequel(): Eleve | null {
+    const listesDisponibles = [filles, garcons, autres].filter(function (liste) {
+      return liste.length > 0;
+    });
+
+    if (listesDisponibles.length === 0) {
       return null;
     }
 
-    const choisi = tous[Math.floor(Math.random() * tous.length)];
-
-    for (const liste of [filles, garcons, autres]) {
-      const index = liste.findIndex(function (item) {
-        return item.id === choisi.id;
-      });
-
-      if (index >= 0) {
-        liste.splice(index, 1);
-        break;
-      }
-    }
-
-    return choisi;
+    const liste = listesDisponibles[Math.floor(Math.random() * listesDisponibles.length)];
+    return retirerDeListe(liste);
   }
 
-  function retirerCompatible(eleveFixe: Eleve | null): Eleve | null {
-    if (eleveFixe && estFille(eleveFixe) && garcons.length > 0) {
-      return garcons.shift() ?? null;
+  function sexeDe(eleve: Eleve | null): "F" | "M" | null {
+    if (!eleve) {
+      return null;
     }
 
-    if (eleveFixe && estGarcon(eleveFixe) && filles.length > 0) {
-      return filles.shift() ?? null;
+    if (estFille(eleve)) {
+      return "F";
     }
 
-    return retirerAleatoire();
+    if (estGarcon(eleve)) {
+      return "M";
+    }
+
+    return null;
   }
 
-  const binomes = melangerTableau(
-    trouverBinomes(
-      nouvellesPlaces.filter(function (place) {
-        return placesActives.has(place.id);
-      }),
-    ),
-  );
-
-  binomes.forEach(function (binome) {
-    const place1 = binome[0];
-    const place2 = binome[1];
-
-    const fixe1 = place1.verrouillee && place1.eleveId !== null;
-
-    const fixe2 = place2.verrouillee && place2.eleveId !== null;
-
-    if (fixe1 && fixe2) {
-      return;
+  function retirerPourSexe(sexeSouhaite: "F" | "M" | null): Eleve | null {
+    if (sexeSouhaite === "F" && filles.length > 0) {
+      return retirerDeListe(filles);
     }
 
-    if (fixe1) {
-      const fixe = elevesParId.get(place1.eleveId!) ?? null;
-
-      const choisi = retirerCompatible(fixe);
-
-      if (choisi) {
-        place2.eleveId = choisi.id;
-      }
-
-      return;
+    if (sexeSouhaite === "M" && garcons.length > 0) {
+      return retirerDeListe(garcons);
     }
 
-    if (fixe2) {
-      const fixe = elevesParId.get(place2.eleveId!) ?? null;
-
-      const choisi = retirerCompatible(fixe);
-
-      if (choisi) {
-        place1.eleveId = choisi.id;
+    // Si l'alternance demandée n'est plus possible, on privilégie le sexe
+    // encore disponible en plus grand nombre avant d'utiliser les valeurs non
+    // renseignées. Cela évite de laisser une place vide pour sauver un binôme.
+    if (filles.length > 0 || garcons.length > 0) {
+      if (filles.length === garcons.length) {
+        return Math.random() < 0.5
+          ? retirerDeListe(filles) ?? retirerDeListe(garcons)
+          : retirerDeListe(garcons) ?? retirerDeListe(filles);
       }
 
-      return;
+      return filles.length > garcons.length
+        ? retirerDeListe(filles)
+        : retirerDeListe(garcons);
     }
 
-    if (filles.length > 0 && garcons.length > 0) {
-      const fille = filles.shift();
+    return retirerNimporteLequel();
+  }
 
-      const garcon = garcons.shift();
-
-      if (!fille || !garcon) {
-        return;
-      }
-
-      if (Math.random() < 0.5) {
-        place1.eleveId = fille.id;
-
-        place2.eleveId = garcon.id;
-      } else {
-        place1.eleveId = garcon.id;
-
-        place2.eleveId = fille.id;
-      }
-    }
-  });
-
-  const restants = melangerTableau([...filles, ...garcons, ...autres]);
-
-  const placesRestantes = nouvellesPlaces
+  // On regroupe les places actives en segments horizontaux continus. Un bloc de
+  // 3 tables est donc traité comme une suite de 3 positions, et un bloc de 4
+  // comme une suite de 4. C'est cette suite entière que l'on cherche à alterner.
+  const activesTriees = nouvellesPlaces
     .filter(function (place) {
-      return placesActives.has(place.id) && place.eleveId === null;
+      return placesActives.has(place.id);
     })
     .sort(function (a, b) {
       if (Math.abs(a.y - b.y) > 0.5) {
         return a.y - b.y;
       }
 
-      return Math.random() - 0.5;
+      return a.x - b.x;
     });
 
-  placesRestantes.forEach(function (place, index) {
-    const eleve = restants[index];
+  const segments: Place[][] = [];
 
-    if (eleve) {
-      place.eleveId = eleve.id;
+  activesTriees.forEach(function (place) {
+    const dernierSegment = segments[segments.length - 1];
+    const dernierePlace = dernierSegment?.[dernierSegment.length - 1];
+
+    if (
+      dernierePlace &&
+      memeLigne(dernierePlace, place) &&
+      Math.abs(place.x - dernierePlace.x) <= LARGEUR_TABLE * 1.35
+    ) {
+      dernierSegment.push(place);
+    } else {
+      segments.push([place]);
     }
   });
+
+  segments.forEach(function (segment) {
+    segment.forEach(function (place, index) {
+      if (place.eleveId !== null) {
+        return;
+      }
+
+      const precedente = index > 0 ? segment[index - 1] : null;
+      const suivante = index + 1 < segment.length ? segment[index + 1] : null;
+
+      const elevePrecedent =
+        precedente?.eleveId === null || precedente?.eleveId === undefined
+          ? null
+          : (elevesParId.get(precedente.eleveId) ?? null);
+
+      const eleveSuivantFixe =
+        suivante?.verrouillee && suivante.eleveId !== null
+          ? (elevesParId.get(suivante.eleveId) ?? null)
+          : null;
+
+      const sexePrecedent = sexeDe(elevePrecedent);
+      const sexeSuivantFixe = sexeDe(eleveSuivantFixe);
+
+      let sexeSouhaite: "F" | "M" | null = null;
+
+      if (sexePrecedent === "F") {
+        sexeSouhaite = "M";
+      } else if (sexePrecedent === "M") {
+        sexeSouhaite = "F";
+      } else if (sexeSuivantFixe === "F") {
+        sexeSouhaite = "M";
+      } else if (sexeSuivantFixe === "M") {
+        sexeSouhaite = "F";
+      } else if (filles.length > 0 && garcons.length > 0) {
+        // Pour le premier siège d'un segment, on varie le sexe de départ entre
+        // les candidats afin de laisser de la liberté aux autres contraintes.
+        sexeSouhaite = Math.random() < 0.5 ? "F" : "M";
+      }
+
+      const choisi = retirerPourSexe(sexeSouhaite);
+
+      if (choisi) {
+        place.eleveId = choisi.id;
+      }
+    });
+  });
+
+  // Cas de secours : toute place active encore vide reçoit un élève restant.
+  // En pratique ce bloc ne sert que si une géométrie très particulière a été
+  // bricolée en mode libre.
+  nouvellesPlaces
+    .filter(function (place) {
+      return placesActives.has(place.id) && place.eleveId === null;
+    })
+    .forEach(function (place) {
+      const choisi = retirerNimporteLequel();
+      if (choisi) {
+        place.eleveId = choisi.id;
+      }
+    });
 
   return nouvellesPlaces;
 }
@@ -1265,6 +1258,7 @@ function evaluerPlan(
   contraintes: ContrainteSeparation[],
   groupesProximite: GroupeProximite[],
   elevesDevant: number[],
+  binomesMixtesActifs: boolean,
 ): EvaluationPlan {
   return {
     violationsSeparation: contraintesNonRespectees(contraintes, places).length,
@@ -1276,7 +1270,7 @@ function evaluerPlan(
 
     violationsDevant: elevesDevantNonRespectes(elevesDevant, places).length,
 
-    mixtes: calculerScoreBinomes(eleves, places).mixtes,
+    mixtes: binomesMixtesActifs ? calculerScoreBinomes(eleves, places).mixtes : 0,
   };
 }
 
@@ -1286,8 +1280,9 @@ function genererMeilleurPlan(
   contraintes: ContrainteSeparation[],
   groupesProximite: GroupeProximite[],
   elevesDevant: number[],
+  binomesMixtesActifs: boolean,
 ): Place[] {
-  let meilleurPlan = genererPlanMixte(eleves, places);
+  let meilleurPlan = genererPlanMixte(eleves, places, binomesMixtesActifs);
 
   let meilleureEvaluation = evaluerPlan(
     eleves,
@@ -1295,10 +1290,11 @@ function genererMeilleurPlan(
     contraintes,
     groupesProximite,
     elevesDevant,
+    binomesMixtesActifs,
   );
 
   for (let essai = 1; essai < 1400; essai++) {
-    const candidat = genererPlanMixte(eleves, places);
+    const candidat = genererPlanMixte(eleves, places, binomesMixtesActifs);
 
     const evaluation = evaluerPlan(
       eleves,
@@ -1306,6 +1302,7 @@ function genererMeilleurPlan(
       contraintes,
       groupesProximite,
       elevesDevant,
+      binomesMixtesActifs,
     );
 
     const meilleureSeparation =
@@ -1347,7 +1344,8 @@ function genererMeilleurPlan(
       meilleureEvaluation.violationsSeparation === 0 &&
       meilleureEvaluation.violationsGroupement === 0 &&
       meilleureEvaluation.violationsDevant === 0 &&
-      meilleureEvaluation.mixtes >= calculerScoreBinomes(eleves, places).possibles
+      (!binomesMixtesActifs ||
+        meilleureEvaluation.mixtes >= calculerScoreBinomes(eleves, meilleurPlan).possibles)
     ) {
       break;
     }
@@ -1429,6 +1427,8 @@ export default function Home() {
 
   const [nombreCasesSuivi, setNombreCasesSuivi] = useState(8);
 
+  const [binomesMixtesActifs, setBinomesMixtesActifs] = useState(true);
+
   useEffect(function () {
     try {
       let texte = localStorage.getItem(CLE_PROJETS);
@@ -1502,6 +1502,7 @@ export default function Home() {
             ? Number(projet.nombreCasesSuivi)
             : 8,
 
+          binomesMixtesActifs: projet.binomesMixtesActifs ?? true,
 
           dateModification: projet.dateModification ?? new Date().toISOString(),
         };
@@ -1536,6 +1537,7 @@ export default function Home() {
             modeSalle,
             grilleSuiviActive,
             nombreCasesSuivi,
+            binomesMixtesActifs,
 
             dateModification: new Date().toISOString(),
           };
@@ -1567,6 +1569,7 @@ export default function Home() {
       modeSalle,
       grilleSuiviActive,
       nombreCasesSuivi,
+      binomesMixtesActifs,
     ],
   );
 
@@ -1898,6 +1901,7 @@ export default function Home() {
         ? Number(projet.nombreCasesSuivi)
         : 8,
     );
+    setBinomesMixtesActifs(projet.binomesMixtesActifs ?? true);
 
     setHistoriqueSalle([]);
     setTablesSelectionnees([]);
@@ -1929,6 +1933,7 @@ export default function Home() {
       modeSalle: "classique",
       grilleSuiviActive: false,
       nombreCasesSuivi: 8,
+      binomesMixtesActifs: true,
 
       dateModification: new Date().toISOString(),
     };
@@ -1949,6 +1954,7 @@ export default function Home() {
     setModeSalle("classique");
     setGrilleSuiviActive(false);
     setNombreCasesSuivi(8);
+    setBinomesMixtesActifs(true);
     setNomNouvelleClasse("");
 
     setVue("plan");
@@ -2118,6 +2124,7 @@ export default function Home() {
       nombreCasesSuivi: [4, 6, 8, 10].includes(Number(source.nombreCasesSuivi))
         ? Number(source.nombreCasesSuivi)
         : 8,
+      binomesMixtesActifs: source.binomesMixtesActifs ?? true,
       dateModification: new Date().toISOString(),
     };
   }
@@ -2505,6 +2512,46 @@ export default function Home() {
     supprimerEleve(eleve.id);
   }
 
+  function demanderSuppressionTousLesEleves() {
+    if (eleves.length === 0) {
+      return;
+    }
+
+    const confirmation = window.confirm(
+      `Supprimer les ${eleves.length} élèves de cette classe ?\n\n` +
+        "Cela videra aussi toutes les places et supprimera les règles de placement, " +
+        "les séparations et les binômes / trinômes.\n\n" +
+        "Cette action sera enregistrée automatiquement.",
+    );
+
+    if (!confirmation) {
+      return;
+    }
+
+    setEleves([]);
+
+    setPlaces(function (actuelles) {
+      return actuelles.map(function (place) {
+        return {
+          ...place,
+          eleveId: null,
+          verrouillee: false,
+        };
+      });
+    });
+
+    setContraintes([]);
+    setGroupesProximite([]);
+    setElevesDevant([]);
+    setAssociations({});
+    setAssociationsProximite({});
+    setEleveAPlacerDevant(null);
+    setSelectionSeparation([]);
+    setSelectionGroupement([]);
+    setModeSelectionSeparation(false);
+    setModeSelectionGroupement(false);
+  }
+
   function choisirSeparationDepuisTable(eleveId: number, valeur: string) {
     if (!valeur) {
       return;
@@ -2748,6 +2795,7 @@ export default function Home() {
         contraintes,
         groupesProximite,
         elevesDevant,
+        binomesMixtesActifs,
       ),
     );
   }
@@ -4296,17 +4344,28 @@ export default function Home() {
 
       {vue === "eleves" && (
         <section className="rounded-2xl border border-blue-200 bg-blue-50 p-5">
-          <div className="mb-4 flex items-center justify-between">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
             <h2 className="text-2xl font-bold text-blue-950">
               👩‍🎓 Modifier les élèves
             </h2>
 
-            <button
-              onClick={ajouterEleve}
-              className="rounded-lg bg-green-600 px-4 py-2 text-sm font-semibold text-white"
-            >
-              ➕ Ajouter
-            </button>
+            <div className="flex flex-wrap gap-2">
+              <button
+                onClick={demanderSuppressionTousLesEleves}
+                disabled={eleves.length === 0}
+                className="rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-700 disabled:cursor-not-allowed disabled:bg-gray-300"
+                title="Supprimer tous les élèves de cette classe"
+              >
+                🗑️ Tout supprimer
+              </button>
+
+              <button
+                onClick={ajouterEleve}
+                className="rounded-lg bg-green-600 px-4 py-2 text-sm font-semibold text-white"
+              >
+                ➕ Ajouter
+              </button>
+            </div>
           </div>
 
           <div className="overflow-x-auto rounded-xl bg-white">
@@ -4541,7 +4600,31 @@ export default function Home() {
             pour générer un placement qui cherche à les respecter.
           </p>
 
-          <label className="mt-4 block cursor-pointer rounded-lg bg-blue-600 p-2 text-center text-sm font-semibold text-white">
+          <div className="mt-4 rounded-xl border border-violet-200 bg-violet-50 p-4">
+            <div className="flex items-start gap-3">
+              <img
+                src="data:image/png;base64,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"
+                alt="Icône d’export CSV de Pronote"
+                className="h-10 w-10 shrink-0"
+              />
+
+              <div>
+                <h3 className="font-bold text-violet-950">Importer directement depuis Pronote</h3>
+                <p className="mt-1 text-xs leading-relaxed text-violet-900">
+                  Dans Pronote, va dans <strong>« Mes données »</strong>, puis
+                  <strong> « Liste des élèves »</strong>. Clique ensuite sur l’icône
+                  ci-contre pour exporter la liste au format CSV, puis importe ce fichier ici.
+                </p>
+              </div>
+            </div>
+
+            <p className="mt-3 text-xs text-violet-800">
+              L’application récupère uniquement les informations utiles au plan de classe
+              (nom, prénom et sexe). Les autres données présentes dans l’export Pronote sont ignorées.
+            </p>
+          </div>
+
+          <label className="mt-3 block cursor-pointer rounded-lg bg-blue-600 p-2 text-center text-sm font-semibold text-white">
             📂 Importer / remplacer par un CSV
             <input
               type="file"
@@ -4552,10 +4635,9 @@ export default function Home() {
           </label>
 
           <p className="mt-2 text-xs text-gray-500">
-            Compatible avec un CSV classique (Prénom, Nom, Sexe) et avec les exports
-            enseignants contenant une colonne « Élèves » au format NOM Prénom. Les
-            autres informations du fichier (date de naissance, e-mail, options, etc.)
-            sont ignorées.
+            Compatible avec les exports CSV de Pronote ainsi qu’avec un CSV classique
+            (Prénom, Nom, Sexe). Si le nom et le prénom sont réunis dans une même colonne,
+            les noms de famille écrits en majuscules sont détectés automatiquement.
           </p>
 
           <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-900">
@@ -4736,12 +4818,14 @@ export default function Home() {
             </div>
 
             <div className="mt-4 flex flex-wrap justify-center gap-4 border-t pt-3 text-xs text-gray-500 print:hidden">
-              <span className={scoreBinomes.mixtes >= scoreBinomes.possibles ? "text-emerald-700" : "text-amber-700"}>
-                {scoreBinomes.mixtes >= scoreBinomes.possibles ? "✓" : "⚠️"} Binômes mixtes :{" "}
-                <strong>
-                  {scoreBinomes.mixtes}/{scoreBinomes.possibles}
-                </strong>
-              </span>
+              {binomesMixtesActifs && (
+                <span className={scoreBinomes.mixtes >= scoreBinomes.possibles ? "text-emerald-700" : "text-amber-700"}>
+                  {scoreBinomes.mixtes >= scoreBinomes.possibles ? "✓" : "⚠️"} Binômes mixtes :{" "}
+                  <strong>
+                    {scoreBinomes.mixtes}/{scoreBinomes.possibles}
+                  </strong>
+                </span>
+              )}
 
               <span>
                 {contraintesEnErreur.length === 0
@@ -4778,6 +4862,85 @@ export default function Home() {
                 Tout déverrouiller
               </button>
             )}
+
+            <section className="mt-5 rounded-xl border border-gray-200 bg-white p-4 shadow-sm print:hidden">
+              <h2 className="text-lg font-bold text-gray-900">📤 Export</h2>
+              <p className="mt-1 text-xs text-gray-500">
+                Prépare la grille papier puis choisis la vue du PDF.
+              </p>
+
+              <div className="mt-4 space-y-4">
+                <section className="rounded-lg border border-gray-200 bg-gray-50/60 p-3">
+                  <h3 className="mb-3 font-bold">▦ Grille de suivi</h3>
+
+              <label className="flex cursor-pointer items-center gap-2 text-sm font-semibold text-gray-700">
+                <input
+                  type="checkbox"
+                  checked={grilleSuiviActive}
+                  onChange={function (event) {
+                    setGrilleSuiviActive(event.target.checked);
+                  }}
+                  className="h-4 w-4"
+                />
+                Ajouter une grille sous chaque élève
+              </label>
+
+              <div className="mt-3 flex items-center gap-2 text-sm text-gray-600">
+                <span>Nombre de cases :</span>
+                <select
+                  value={nombreCasesSuivi}
+                  disabled={!grilleSuiviActive}
+                  onChange={function (event) {
+                    setNombreCasesSuivi(Number(event.target.value));
+                  }}
+                  className="rounded-md border bg-white px-2 py-1 disabled:opacity-40"
+                >
+                  {[4, 6, 8, 10].map(function (valeur) {
+                    return (
+                      <option key={valeur} value={valeur}>
+                        {valeur}
+                      </option>
+                    );
+                  })}
+                </select>
+              </div>
+
+              <p className="mt-2 text-xs text-gray-500">
+                La grille est volontairement vide : elle est prévue pour être cochée au stylo sur le plan imprimé. Par défaut, 8 cases sont affichées sur 2 lignes de 4.
+              </p>
+                </section>
+
+                <section className="rounded-lg border border-gray-200 bg-gray-50/60 p-3">
+                  <h3 className="mb-3 font-bold">🖨️ Export PDF</h3>
+
+              <label className="mb-1 block text-xs font-medium text-gray-500">
+                Orientation du plan
+              </label>
+
+              <select
+                value={vueExport}
+                onChange={function (event) {
+                  setVueExport(event.target.value as VueExport);
+                }}
+                className="mb-3 w-full rounded-lg border bg-white p-2.5 text-sm"
+              >
+                <option value="aerienne">Vue aérienne</option>
+                <option value="professeur">Vue professeur</option>
+              </select>
+
+              <p className="mb-3 text-xs text-gray-500">
+                Vue aérienne : tableau en haut. Vue professeur : tableau en bas, comme lorsque tu regardes la classe depuis le tableau. Le PDF sera en A4 paysage et affichera le nom de la classe.
+              </p>
+
+              <button
+                onClick={imprimerPlan}
+                className="w-full rounded-lg border border-gray-300 bg-gray-50 p-2.5 font-semibold text-gray-700 transition hover:bg-gray-100"
+              >
+                Exporter en PDF
+              </button>
+                </section>
+              </div>
+            </section>
           </section>
 
           {/* OUTILS À DROITE */}
@@ -4791,9 +4954,10 @@ export default function Home() {
               <button
                 onClick={ordreAlphabetiquePrenom}
                 disabled={modeSelectionSeparation || modeSelectionGroupement}
-                className="mt-4 w-full rounded-lg border border-gray-300 bg-white p-3 font-semibold text-gray-700 transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
+                className="mt-4 w-full rounded-lg bg-sky-600 p-3 font-bold text-white shadow-sm transition hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-40"
               >
-                🔤 Ordre alphabétique (prénom)
+                <span className="block">🔤 Placement alphabétique</span>
+                <span className="mt-0.5 block text-[11px] font-medium text-sky-100">par prénom</span>
               </button>
 
               <div className="mt-4 rounded-xl border-2 border-indigo-200 bg-white p-3 shadow-sm">
@@ -4805,26 +4969,38 @@ export default function Home() {
                   🧠 Placement intelligent
                 </button>
 
-                <div className="mt-2 rounded-lg bg-indigo-50 px-3 py-2 text-xs text-indigo-950">
-                  <div className="flex items-center justify-between gap-2">
-                    <span>⚖️ Binômes mixtes</span>
-                    <strong className={scoreBinomes.mixtes >= scoreBinomes.possibles ? "text-emerald-700" : "text-amber-700"}>
-                      {scoreBinomes.mixtes >= scoreBinomes.possibles ? "✓ " : "⚠️ "}
-                      {scoreBinomes.mixtes}/{scoreBinomes.possibles}
-                    </strong>
-                  </div>
-                  <p className="mt-1 text-[11px] text-indigo-800/70">
-                    Le placement intelligent cherche à obtenir le maximum de binômes fille/garçon parmi les tables côte à côte.
-                  </p>
-                </div>
-
                 <p className="mt-3 text-xs font-semibold text-indigo-900">
                   Règles prises en compte par ce bouton :
                 </p>
 
+                <label className="mt-2 flex cursor-pointer items-start gap-2 rounded-lg border border-indigo-200 bg-indigo-50/80 px-3 py-2 text-xs text-indigo-950">
+                  <input
+                    type="checkbox"
+                    checked={binomesMixtesActifs}
+                    onChange={function (event) {
+                      setBinomesMixtesActifs(event.target.checked);
+                    }}
+                    className="mt-0.5 h-4 w-4 shrink-0"
+                  />
+                  <span className="min-w-0 flex-1">
+                    <span className="flex items-center justify-between gap-2 font-semibold">
+                      <span>⚖️ Binômes mixtes</span>
+                      {binomesMixtesActifs && (
+                        <strong className={scoreBinomes.mixtes >= scoreBinomes.possibles ? "text-emerald-700" : "text-amber-700"}>
+                          {scoreBinomes.mixtes >= scoreBinomes.possibles ? "✓ " : "⚠️ "}
+                          {scoreBinomes.mixtes}/{scoreBinomes.possibles}
+                        </strong>
+                      )}
+                    </span>
+                    <span className="mt-1 block text-[11px] font-normal text-indigo-800/70">
+                      Cherche surtout à alterner filles et garçons sur les tables côte à côte, y compris sur les blocs de 3 ou 4 tables.
+                    </span>
+                  </span>
+                </label>
+
                 <div className="mt-3 space-y-3">
-                  <section className="rounded-lg border border-amber-200 bg-amber-50/60 p-3">
-                    <h3 className="mb-2 font-bold text-amber-950">📍 Placer devant</h3>
+                  <section className="rounded-lg border border-indigo-200 bg-indigo-50/60 p-2.5 text-xs">
+                    <h3 className="mb-2 text-sm font-bold text-indigo-950">📍 Placer devant</h3>
 
               <select
                 value={eleveAPlacerDevant ?? ""}
@@ -4852,7 +5028,7 @@ export default function Home() {
 
               <button
                 onClick={ajouterEleveDevant}
-                className="w-full rounded-lg bg-amber-500 p-2 font-semibold text-white"
+                className="w-full rounded-lg bg-indigo-600 p-2 text-xs font-semibold text-white hover:bg-indigo-700"
               >
                 Ajouter
               </button>
@@ -4895,17 +5071,17 @@ export default function Home() {
 
                   <section
                     className={
-                      "rounded-lg border border-emerald-200 bg-emerald-50/60 p-3 " +
+                      "rounded-lg border border-indigo-200 bg-indigo-50/60 p-2.5 text-xs " +
                       (modeSelectionGroupement ? "ring-2 ring-emerald-300" : "")
                     }
                   >
               <div className="mb-3 flex justify-between gap-2">
-                <h2 className="font-bold">👥 Binôme / trinôme</h2>
+                <h2 className="text-sm font-bold text-indigo-950">👥 Binôme / trinôme</h2>
 
                 {!modeSelectionGroupement && !modeSelectionSeparation && (
                   <button
                     onClick={commencerModeGroupement}
-                    className="rounded bg-emerald-100 px-2 py-1 text-sm font-semibold text-emerald-800"
+                    className="rounded bg-indigo-100 px-2 py-1 text-xs font-semibold text-indigo-800"
                   >
                     + Créer
                   </button>
@@ -4998,17 +5174,17 @@ export default function Home() {
 
                   <section
                     className={
-                      "rounded-lg border border-red-200 bg-red-50/60 p-3 " +
+                      "rounded-lg border border-indigo-200 bg-indigo-50/60 p-2.5 text-xs " +
                       (modeSelectionSeparation ? "ring-2 ring-red-300" : "")
                     }
                   >
               <div className="mb-3 flex justify-between gap-2">
-                <h2 className="font-bold">🚫 Séparations</h2>
+                <h2 className="text-sm font-bold text-indigo-950">🚫 Séparations</h2>
 
                 {!modeSelectionSeparation && !modeSelectionGroupement && (
                   <button
                     onClick={commencerModeSeparation}
-                    className="rounded bg-red-100 px-2 py-1 text-sm font-semibold text-red-800"
+                    className="rounded bg-indigo-100 px-2 py-1 text-xs font-semibold text-indigo-800"
                   >
                     + Créer
                   </button>
@@ -5100,84 +5276,6 @@ export default function Home() {
               </div>
             </section>
 
-            <section className="rounded-xl border border-gray-200 bg-white p-4 shadow">
-              <h2 className="text-lg font-bold text-gray-900">📤 Export</h2>
-              <p className="mt-1 text-xs text-gray-500">
-                Prépare la grille papier puis choisis la vue du PDF.
-              </p>
-
-              <div className="mt-4 space-y-4">
-                <section className="rounded-lg border border-gray-200 bg-gray-50/60 p-3">
-                  <h3 className="mb-3 font-bold">▦ Grille de suivi</h3>
-
-              <label className="flex cursor-pointer items-center gap-2 text-sm font-semibold text-gray-700">
-                <input
-                  type="checkbox"
-                  checked={grilleSuiviActive}
-                  onChange={function (event) {
-                    setGrilleSuiviActive(event.target.checked);
-                  }}
-                  className="h-4 w-4"
-                />
-                Ajouter une grille sous chaque élève
-              </label>
-
-              <div className="mt-3 flex items-center gap-2 text-sm text-gray-600">
-                <span>Nombre de cases :</span>
-                <select
-                  value={nombreCasesSuivi}
-                  disabled={!grilleSuiviActive}
-                  onChange={function (event) {
-                    setNombreCasesSuivi(Number(event.target.value));
-                  }}
-                  className="rounded-md border bg-white px-2 py-1 disabled:opacity-40"
-                >
-                  {[4, 6, 8, 10].map(function (valeur) {
-                    return (
-                      <option key={valeur} value={valeur}>
-                        {valeur}
-                      </option>
-                    );
-                  })}
-                </select>
-              </div>
-
-              <p className="mt-2 text-xs text-gray-500">
-                La grille est volontairement vide : elle est prévue pour être cochée au stylo sur le plan imprimé. Par défaut, 8 cases sont affichées sur 2 lignes de 4.
-              </p>
-                </section>
-
-                <section className="rounded-lg border border-gray-200 bg-gray-50/60 p-3">
-                  <h3 className="mb-3 font-bold">🖨️ Export PDF</h3>
-
-              <label className="mb-1 block text-xs font-medium text-gray-500">
-                Orientation du plan
-              </label>
-
-              <select
-                value={vueExport}
-                onChange={function (event) {
-                  setVueExport(event.target.value as VueExport);
-                }}
-                className="mb-3 w-full rounded-lg border bg-white p-2.5 text-sm"
-              >
-                <option value="aerienne">Vue aérienne</option>
-                <option value="professeur">Vue professeur</option>
-              </select>
-
-              <p className="mb-3 text-xs text-gray-500">
-                Vue aérienne : tableau en haut. Vue professeur : tableau en bas, comme lorsque tu regardes la classe depuis le tableau. Le PDF sera en A4 paysage et affichera le nom de la classe.
-              </p>
-
-              <button
-                onClick={imprimerPlan}
-                className="w-full rounded-lg border border-gray-300 bg-gray-50 p-2.5 font-semibold text-gray-700 transition hover:bg-gray-100"
-              >
-                Exporter en PDF
-              </button>
-                </section>
-              </div>
-            </section>
           </aside>
         </div>
       )}

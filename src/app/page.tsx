@@ -335,6 +335,52 @@ function estGarcon(eleve: Eleve): boolean {
   );
 }
 
+function normaliserSexeImport(valeur: unknown): string {
+  const texte = String(valeur ?? "").trim().toLocaleLowerCase("fr-FR");
+
+  if (["f", "féminin", "feminin", "fille", "female"].includes(texte)) {
+    return "F";
+  }
+
+  if (["m", "masculin", "garçon", "garcon", "male"].includes(texte)) {
+    return "M";
+  }
+
+  return String(valeur ?? "").trim();
+}
+
+function separerNomPrenomEnseignant(valeur: unknown): {
+  nom: string;
+  prenom: string;
+} {
+  const texte = String(valeur ?? "").trim().replace(/\s+/g, " ");
+
+  if (!texte) {
+    return { nom: "", prenom: "" };
+  }
+
+  const morceaux = texte.split(" ");
+  let premierPrenom = morceaux.findIndex(function (morceau) {
+    if (morceau === "--" || morceau === "-" || morceau === "/") {
+      return false;
+    }
+
+    const contientLettre = morceau.toLocaleLowerCase("fr-FR") !== morceau.toLocaleUpperCase("fr-FR");
+    const estMajuscule = morceau === morceau.toLocaleUpperCase("fr-FR");
+
+    return contientLettre && !estMajuscule;
+  });
+
+  if (premierPrenom < 0) {
+    premierPrenom = morceaux.length;
+  }
+
+  return {
+    nom: morceaux.slice(0, premierPrenom).join(" ").trim(),
+    prenom: morceaux.slice(premierPrenom).join(" ").trim(),
+  };
+}
+
 function nomCourt(eleve: Eleve, eleves: Eleve[]): string {
   if (!eleve.nom.trim()) {
     return eleve.prenom;
@@ -738,7 +784,11 @@ function trouverBinomes(places: Place[]): Place[][] {
     for (let j = i + 1; j < places.length; j++) {
       const mesure = distanceEntreTables(places[i], places[j]);
 
-      if (mesure.distance <= 1.25) {
+      // Les binômes mixtes correspondent à des tables réellement côte à côte
+      // sur une même rangée. On exclut donc les voisinages verticaux : auparavant,
+      // certaines dispositions pouvaient considérer deux élèves l'un derrière
+      // l'autre comme un binôme.
+      if (memeLigne(places[i], places[j]) && mesure.distance <= 1.25) {
         candidats.push({
           place1: places[i],
           place2: places[j],
@@ -808,11 +858,34 @@ function calculerScoreBinomes(eleves: Eleve[], places: Place[]): ScoreBinomes {
     }
   });
 
+  // L'objectif doit refléter le plan réellement occupé, pas toutes les
+  // tables disponibles dans la salle. Sinon l'indicateur pouvait annoncer
+  // artificiellement qu'il manquait des binômes mixtes à cause de places vides.
+  const elevesPlaces = new Set<number>();
+  let binomesOccupes = 0;
+
+  binomes.forEach(function (binome) {
+    if (binome[0].eleveId !== null) {
+      elevesPlaces.add(binome[0].eleveId);
+    }
+
+    if (binome[1].eleveId !== null) {
+      elevesPlaces.add(binome[1].eleveId);
+    }
+
+    if (binome[0].eleveId !== null && binome[1].eleveId !== null) {
+      binomesOccupes++;
+    }
+  });
+
+  const elevesEffectivementPlaces = eleves.filter(function (eleve) {
+    return elevesPlaces.has(eleve.id);
+  });
+
   const possibles = Math.min(
-    eleves.filter(estFille).length,
-    eleves.filter(estGarcon).length,
-    binomes.length,
-    Math.floor(eleves.length / 2),
+    elevesEffectivementPlaces.filter(estFille).length,
+    elevesEffectivementPlaces.filter(estGarcon).length,
+    binomesOccupes,
   );
 
   return {
@@ -945,7 +1018,7 @@ function obtenirElevesVerrouilles(places: Place[]): Set<number> {
 }
 
 /*
-  Le mélange intelligent ne doit pas disperser
+  Le placement intelligent ne doit pas disperser
   inutilement les élèves dans toute la salle.
 
   On sélectionne donc d'abord les places les plus
@@ -969,22 +1042,53 @@ function choisirPlacesActivesVersAvant(
     }),
   );
 
+  // Pour préserver de vrais binômes côte à côte, on sélectionne d'abord les
+  // places par paires complètes, de l'avant vers le fond. Cela évite par exemple
+  // de prendre deux demi-binômes au centre d'une rangée lorsqu'il ne reste que
+  // deux élèves à placer.
+  const binomes = trouverBinomes(places).sort(function (a, b) {
+    const yA = (a[0].y + a[1].y) / 2;
+    const yB = (b[0].y + b[1].y) / 2;
+
+    if (Math.abs(yA - yB) > 0.5) {
+      return yA - yB;
+    }
+
+    const centreA = (a[0].x + a[1].x) / 2;
+    const centreB = (b[0].x + b[1].x) / 2;
+
+    return Math.abs(centreA - 50) - Math.abs(centreB - 50);
+  });
+
+  binomes.forEach(function (binome) {
+    if (idsActifs.size >= nombreAPlacer) {
+      return;
+    }
+
+    const aAjouter = binome.filter(function (place) {
+      return !idsActifs.has(place.id);
+    });
+
+    const placesRestantes = nombreAPlacer - idsActifs.size;
+
+    if (aAjouter.length <= placesRestantes) {
+      aAjouter.forEach(function (place) {
+        idsActifs.add(place.id);
+      });
+    }
+  });
+
+  // S'il reste un nombre impair d'élèves, ou une place verrouillée isolée,
+  // on complète ensuite avec les meilleures places individuelles.
   const restantes = places
     .filter(function (place) {
       return !idsActifs.has(place.id);
     })
     .sort(function (a, b) {
-      /*
-          Priorité absolue aux rangées avant.
-        */
       if (Math.abs(a.y - b.y) > 0.5) {
         return a.y - b.y;
       }
 
-      /*
-          À rangée égale, on garde une disposition
-          relativement équilibrée autour du centre.
-        */
       return Math.abs(a.x - 50) - Math.abs(b.x - 50);
     });
 
@@ -2671,38 +2775,64 @@ export default function Home() {
 
     Papa.parse(fichier, {
       header: true,
-      skipEmptyLines: true,
+      skipEmptyLines: "greedy",
+      transformHeader: function (entete) {
+        return entete.replace(/^\uFEFF/, "").trim();
+      },
 
       complete: function (result) {
         const nouveauxEleves: Eleve[] = result.data
           .map(function (ligne: any, index: number) {
+            const prenomSepare = String(
+              ligne.Prénom ?? ligne.Prenom ?? ligne.prenom ?? "",
+            ).trim();
+            const nomSepare = String(ligne.Nom ?? ligne.nom ?? "").trim();
+
+            // Certains logiciels enseignants exportent « NOM Prénom » dans
+            // une seule colonne « Élèves ». Les noms de famille étant en
+            // majuscules, on peut repérer automatiquement où commence le prénom.
+            const nomComplet =
+              ligne["Élèves"] ??
+              ligne.Eleves ??
+              ligne["Élève"] ??
+              ligne.Eleve ??
+              ligne["Nom Prénom"] ??
+              ligne["Nom Prenom"] ??
+              "";
+
+            const nomsDetectes =
+              prenomSepare || nomSepare
+                ? { nom: nomSepare, prenom: prenomSepare }
+                : separerNomPrenomEnseignant(nomComplet);
+
             return {
               id: Date.now() + index,
-
-              prenom: ligne.Prénom ?? ligne.Prenom ?? ligne.prenom ?? "",
-
-              nom: ligne.Nom ?? ligne.nom ?? "",
-
-              sexe: ligne.Sexe ?? ligne.sexe ?? "",
+              prenom: nomsDetectes.prenom,
+              nom: nomsDetectes.nom,
+              sexe: normaliserSexeImport(ligne.Sexe ?? ligne.sexe ?? ""),
             };
           })
           .filter(function (eleve: Eleve) {
-            return eleve.prenom || eleve.nom;
+            return Boolean(eleve.prenom || eleve.nom);
           });
 
-        setEleves(nouveauxEleves);
+        if (nouveauxEleves.length === 0) {
+          window.alert(
+            "Aucun élève n’a été trouvé dans ce fichier. Vérifie qu’il s’agit bien d’un CSV contenant soit les colonnes Prénom/Nom, soit une colonne Élèves.",
+          );
+          return;
+        }
 
+        setEleves(nouveauxEleves);
         setContraintes([]);
         setGroupesProximite([]);
         setElevesDevant([]);
-    
+
         setPlaces(function (actuelles) {
           return actuelles.map(function (place, index) {
             return {
               ...place,
-
               eleveId: nouveauxEleves[index]?.id ?? null,
-
               verrouillee: false,
             };
           });
@@ -4407,7 +4537,7 @@ export default function Home() {
 
           <p className="mt-3 rounded-lg bg-blue-100/60 px-3 py-2 text-xs text-blue-900">
             💡 Après avoir défini les règles « à séparer » ou « à placer à côté de »,
-            appuie sur <strong>« Mélange intelligent »</strong> dans le Plan général
+            appuie sur <strong>« Placement intelligent »</strong> dans le Plan général
             pour générer un placement qui cherche à les respecter.
           </p>
 
@@ -4415,11 +4545,24 @@ export default function Home() {
             📂 Importer / remplacer par un CSV
             <input
               type="file"
-              accept=".csv"
+              accept=".csv,text/csv"
               onChange={importerCSV}
               className="hidden"
             />
           </label>
+
+          <p className="mt-2 text-xs text-gray-500">
+            Compatible avec un CSV classique (Prénom, Nom, Sexe) et avec les exports
+            enseignants contenant une colonne « Élèves » au format NOM Prénom. Les
+            autres informations du fichier (date de naissance, e-mail, options, etc.)
+            sont ignorées.
+          </p>
+
+          <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-900">
+            🔒 <strong>Confidentialité :</strong> les données des élèves restent
+            stockées localement dans ton navigateur. Elles ne sont pas envoyées au
+            concepteur du logiciel et ne lui sont pas visibles.
+          </div>
         </section>
       )}
 
@@ -4434,25 +4577,6 @@ export default function Home() {
             {elevesNonPlaces.length > 0 && (
               <div className="mb-4 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 print:hidden">
                 ⚠️ <strong>{elevesNonPlaces.length} élève(s) non placé(s)</strong> sur le plan.
-              </div>
-            )}
-
-            {/* BOUTONS REMONTÉS AU-DESSUS DU PLAN */}
-            {!modeSelectionSeparation && !modeSelectionGroupement && (
-              <div className="mb-4 grid gap-3 sm:grid-cols-2 print:hidden">
-                <button
-                  onClick={ordreAlphabetiquePrenom}
-                  className="rounded-lg bg-green-600 p-3 font-bold text-white transition hover:bg-green-700"
-                >
-                  🔤 Ordre alphabétique (prénom)
-                </button>
-
-                <button
-                  onClick={melangerIntelligemment}
-                  className="rounded-lg bg-indigo-600 p-3 font-bold text-white transition hover:bg-indigo-700"
-                >
-                  🧠 Mélange intelligent
-                </button>
               </div>
             )}
 
@@ -4612,8 +4736,8 @@ export default function Home() {
             </div>
 
             <div className="mt-4 flex flex-wrap justify-center gap-4 border-t pt-3 text-xs text-gray-500 print:hidden">
-              <span>
-                ⚖️ Binômes mixtes :{" "}
+              <span className={scoreBinomes.mixtes >= scoreBinomes.possibles ? "text-emerald-700" : "text-amber-700"}>
+                {scoreBinomes.mixtes >= scoreBinomes.possibles ? "✓" : "⚠️"} Binômes mixtes :{" "}
                 <strong>
                   {scoreBinomes.mixtes}/{scoreBinomes.possibles}
                 </strong>
@@ -4658,8 +4782,49 @@ export default function Home() {
 
           {/* OUTILS À DROITE */}
           <aside className="space-y-5 lg:col-span-1 print:hidden">
-            <section className="rounded-xl bg-white p-5 shadow">
-              <h2 className="mb-3 font-bold">📍 Placer devant</h2>
+            <section className="rounded-xl border border-indigo-100 bg-indigo-50/50 p-4 shadow-sm">
+              <h2 className="text-lg font-bold text-indigo-950">🎯 Placement</h2>
+              <p className="mt-1 text-xs text-indigo-800/70">
+                Choisis un placement simple, ou utilise le placement intelligent avec les règles ci-dessous.
+              </p>
+
+              <button
+                onClick={ordreAlphabetiquePrenom}
+                disabled={modeSelectionSeparation || modeSelectionGroupement}
+                className="mt-4 w-full rounded-lg border border-gray-300 bg-white p-3 font-semibold text-gray-700 transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                🔤 Ordre alphabétique (prénom)
+              </button>
+
+              <div className="mt-4 rounded-xl border-2 border-indigo-200 bg-white p-3 shadow-sm">
+                <button
+                  onClick={melangerIntelligemment}
+                  disabled={modeSelectionSeparation || modeSelectionGroupement}
+                  className="w-full rounded-lg bg-indigo-600 p-3 font-bold text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  🧠 Placement intelligent
+                </button>
+
+                <div className="mt-2 rounded-lg bg-indigo-50 px-3 py-2 text-xs text-indigo-950">
+                  <div className="flex items-center justify-between gap-2">
+                    <span>⚖️ Binômes mixtes</span>
+                    <strong className={scoreBinomes.mixtes >= scoreBinomes.possibles ? "text-emerald-700" : "text-amber-700"}>
+                      {scoreBinomes.mixtes >= scoreBinomes.possibles ? "✓ " : "⚠️ "}
+                      {scoreBinomes.mixtes}/{scoreBinomes.possibles}
+                    </strong>
+                  </div>
+                  <p className="mt-1 text-[11px] text-indigo-800/70">
+                    Le placement intelligent cherche à obtenir le maximum de binômes fille/garçon parmi les tables côte à côte.
+                  </p>
+                </div>
+
+                <p className="mt-3 text-xs font-semibold text-indigo-900">
+                  Règles prises en compte par ce bouton :
+                </p>
+
+                <div className="mt-3 space-y-3">
+                  <section className="rounded-lg border border-amber-200 bg-amber-50/60 p-3">
+                    <h3 className="mb-2 font-bold text-amber-950">📍 Placer devant</h3>
 
               <select
                 value={eleveAPlacerDevant ?? ""}
@@ -4726,14 +4891,14 @@ export default function Home() {
                   );
                 })}
               </div>
-            </section>
+                  </section>
 
-            <section
-              className={
-                "rounded-xl bg-white p-5 shadow " +
-                (modeSelectionGroupement ? "ring-2 ring-emerald-300" : "")
-              }
-            >
+                  <section
+                    className={
+                      "rounded-lg border border-emerald-200 bg-emerald-50/60 p-3 " +
+                      (modeSelectionGroupement ? "ring-2 ring-emerald-300" : "")
+                    }
+                  >
               <div className="mb-3 flex justify-between gap-2">
                 <h2 className="font-bold">👥 Binôme / trinôme</h2>
 
@@ -4778,7 +4943,7 @@ export default function Home() {
                   </button>
 
                   <p className="mt-2 text-xs text-emerald-900">
-                    💡 Une fois le groupe créé, appuie sur <strong>« Mélange intelligent »</strong>
+                    💡 Une fois le groupe créé, appuie sur <strong>« Placement intelligent »</strong>
                     pour chercher un plan qui respecte cette règle.
                   </p>
                 </div>
@@ -4824,19 +4989,19 @@ export default function Home() {
                   })}
 
                   <p className="rounded bg-emerald-50 p-2 text-xs text-emerald-900">
-                    💡 Appuie ensuite sur <strong>« Mélange intelligent »</strong>
+                    💡 Appuie ensuite sur <strong>« Placement intelligent »</strong>
                     pour constituer un plan qui cherche à respecter cette règle.
                   </p>
                 </div>
               )}
-            </section>
+                  </section>
 
-            <section
-              className={
-                "rounded-xl bg-white p-5 shadow " +
-                (modeSelectionSeparation ? "ring-2 ring-red-300" : "")
-              }
-            >
+                  <section
+                    className={
+                      "rounded-lg border border-red-200 bg-red-50/60 p-3 " +
+                      (modeSelectionSeparation ? "ring-2 ring-red-300" : "")
+                    }
+                  >
               <div className="mb-3 flex justify-between gap-2">
                 <h2 className="font-bold">🚫 Séparations</h2>
 
@@ -4881,7 +5046,7 @@ export default function Home() {
                   </button>
 
                   <p className="mt-2 text-xs text-red-900">
-                    💡 Une fois la séparation créée, appuie sur <strong>« Mélange intelligent »</strong>
+                    💡 Une fois la séparation créée, appuie sur <strong>« Placement intelligent »</strong>
                     pour chercher un plan qui respecte cette règle.
                   </p>
                 </div>
@@ -4925,15 +5090,25 @@ export default function Home() {
                   })}
 
                   <p className="rounded bg-red-50 p-2 text-xs text-red-900">
-                    💡 Appuie ensuite sur <strong>« Mélange intelligent »</strong>
+                    💡 Appuie ensuite sur <strong>« Placement intelligent »</strong>
                     pour constituer un plan qui cherche à respecter cette règle.
                   </p>
                 </div>
               )}
+                  </section>
+                </div>
+              </div>
             </section>
 
-            <section className="rounded-xl bg-white p-4 shadow">
-              <h2 className="mb-3 font-bold">▦ Grille de suivi</h2>
+            <section className="rounded-xl border border-gray-200 bg-white p-4 shadow">
+              <h2 className="text-lg font-bold text-gray-900">📤 Export</h2>
+              <p className="mt-1 text-xs text-gray-500">
+                Prépare la grille papier puis choisis la vue du PDF.
+              </p>
+
+              <div className="mt-4 space-y-4">
+                <section className="rounded-lg border border-gray-200 bg-gray-50/60 p-3">
+                  <h3 className="mb-3 font-bold">▦ Grille de suivi</h3>
 
               <label className="flex cursor-pointer items-center gap-2 text-sm font-semibold text-gray-700">
                 <input
@@ -4970,10 +5145,10 @@ export default function Home() {
               <p className="mt-2 text-xs text-gray-500">
                 La grille est volontairement vide : elle est prévue pour être cochée au stylo sur le plan imprimé. Par défaut, 8 cases sont affichées sur 2 lignes de 4.
               </p>
-            </section>
+                </section>
 
-            <section className="rounded-xl bg-white p-4 shadow">
-              <h2 className="mb-3 font-bold">🖨️ Export PDF</h2>
+                <section className="rounded-lg border border-gray-200 bg-gray-50/60 p-3">
+                  <h3 className="mb-3 font-bold">🖨️ Export PDF</h3>
 
               <label className="mb-1 block text-xs font-medium text-gray-500">
                 Orientation du plan
@@ -5000,6 +5175,8 @@ export default function Home() {
               >
                 Exporter en PDF
               </button>
+                </section>
+              </div>
             </section>
           </aside>
         </div>

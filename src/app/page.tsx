@@ -3344,7 +3344,26 @@ export default function Home() {
   }
 
   function mettreAJourReperesAlignement(clientX: number, clientY: number) {
-    if (modeSalle !== "libre" || tableDeplaceeId === null) {
+    if (tableDeplaceeId === null) {
+      setReperesAlignement({ x: null, y: null });
+      return;
+    }
+
+    if (
+      modeSalle === "classique" &&
+      tablesSelectionnees.length > 1 &&
+      tablesSelectionnees.includes(tableDeplaceeId)
+    ) {
+      const deplacement = calculerDeplacementGroupeClassique(clientX, clientY);
+
+      setReperesAlignement({
+        x: deplacement?.repereX ?? null,
+        y: deplacement?.repereY ?? null,
+      });
+      return;
+    }
+
+    if (modeSalle !== "libre") {
       setReperesAlignement({ x: null, y: null });
       return;
     }
@@ -3581,6 +3600,173 @@ export default function Home() {
     return true;
   }
 
+  function calculerDeplacementGroupeClassique(
+    clientX: number,
+    clientY: number,
+  ) {
+    if (
+      modeSalle !== "classique" ||
+      tableDeplaceeId === null ||
+      tablesSelectionnees.length <= 1 ||
+      !tablesSelectionnees.includes(tableDeplaceeId)
+    ) {
+      return null;
+    }
+
+    const tableAncre = places.find(function (place) {
+      return place.id === tableDeplaceeId;
+    });
+
+    if (!tableAncre) {
+      return null;
+    }
+
+    const position = positionDansSalle(clientX, clientY);
+
+    /*
+      Important : on ne cherche plus une colonne déjà existante.
+      C'était la cause du comportement peu intuitif : une colonne sélectionnée
+      ne pouvait se déplacer que vers un x déjà occupé, donc souvent en collision.
+
+      On utilise maintenant la même grille horizontale fine que le mode libre.
+      Une colonne peut donc créer directement un nouvel alignement (par exemple
+      passer de x=42 à x=34/36/38) sans devoir déplacer d'abord une table seule.
+    */
+    const cibleX = trouverPointGrilleLePlusProche(position.x, tableAncre.y).x;
+
+    const rangees: number[] = Array.from(
+      new Set<number>(
+        places.map(function (place) {
+          return place.y;
+        }),
+      ),
+    ).sort(function (a, b) {
+      return a - b;
+    });
+
+    let cibleY = tableAncre.y;
+
+    if (rangees.length > 0) {
+      let meilleureDistance = Number.POSITIVE_INFINITY;
+
+      rangees.forEach(function (y) {
+        const distance = Math.abs(position.y - y);
+
+        if (distance < meilleureDistance) {
+          cibleY = y;
+          meilleureDistance = distance;
+        }
+      });
+    }
+
+    const decalageX = cibleX - tableAncre.x;
+    const decalageY = cibleY - tableAncre.y;
+
+    return {
+      decalageX,
+      decalageY,
+      repereX: cibleX,
+      repereY: Math.abs(decalageY) > 0.1 ? cibleY : null,
+    };
+  }
+
+  function deposerGroupeTablesClassique(
+    clientX: number,
+    clientY: number,
+  ): boolean {
+    const deplacement = calculerDeplacementGroupeClassique(clientX, clientY);
+
+    if (!deplacement) {
+      return false;
+    }
+
+    const decalageX = deplacement.decalageX;
+    const decalageY = deplacement.decalageY;
+
+    if (Math.abs(decalageX) < 0.1 && Math.abs(decalageY) < 0.1) {
+      return true;
+    }
+
+    const idsSelectionnes = new Set(tablesSelectionnees);
+
+    const nouvellesPositions = places
+      .filter(function (place) {
+        return idsSelectionnes.has(place.id);
+      })
+      .map(function (place) {
+        return {
+          id: place.id,
+          x: place.x + decalageX,
+          y: place.y + decalageY,
+        };
+      });
+
+    const horsSalle = nouvellesPositions.some(function (positionTable) {
+      return (
+        positionTable.x < 6 ||
+        positionTable.x > 94 ||
+        positionTable.y < 6 ||
+        positionTable.y > 94
+      );
+    });
+
+    if (horsSalle) {
+      return true;
+    }
+
+    const autresTables = places.filter(function (place) {
+      return !idsSelectionnes.has(place.id);
+    });
+
+    const collision = nouvellesPositions.some(function (positionTable) {
+      return autresTables.some(function (autre) {
+        return (
+          Math.abs(positionTable.x - autre.x) < 7.5 &&
+          Math.abs(positionTable.y - autre.y) < 10
+        );
+      });
+    });
+
+    if (collision) {
+      return true;
+    }
+
+    const positionParId = new Map<
+      number,
+      {
+        x: number;
+        y: number;
+      }
+    >();
+
+    nouvellesPositions.forEach(function (positionTable) {
+      positionParId.set(positionTable.id, {
+        x: positionTable.x,
+        y: positionTable.y,
+      });
+    });
+
+    memoriserEtatSalle();
+
+    setPlaces(
+      places.map(function (place) {
+        const nouvellePosition = positionParId.get(place.id);
+
+        if (!nouvellePosition) {
+          return place;
+        }
+
+        return {
+          ...place,
+          x: nouvellePosition.x,
+          y: nouvellePosition.y,
+        };
+      }),
+    );
+
+    return true;
+  }
+
   function deposerTableDansSalle(clientX: number, clientY: number) {
     if (tableDeplaceeId === null) {
       return;
@@ -3595,6 +3781,12 @@ export default function Home() {
     }
 
     if (deposerGroupeTables(clientX, clientY)) {
+      setTableDeplaceeId(null);
+      setReperesAlignement({ x: null, y: null });
+      return;
+    }
+
+    if (deposerGroupeTablesClassique(clientX, clientY)) {
       setTableDeplaceeId(null);
       setReperesAlignement({ x: null, y: null });
       return;
@@ -4600,7 +4792,18 @@ export default function Home() {
             pour générer un placement qui cherche à les respecter.
           </p>
 
-          <div className="mt-4 rounded-xl border border-violet-200 bg-violet-50 p-4">
+          <label className="mt-3 block cursor-pointer rounded-lg bg-blue-600 p-2 text-center text-sm font-semibold text-white">
+            📂 Importer / remplacer par un CSV
+            <input
+              type="file"
+              accept=".csv,text/csv"
+              onChange={importerCSV}
+              className="hidden"
+            />
+          </label>
+
+
+          <div className="mt-3 rounded-xl border border-violet-200 bg-violet-50 p-4">
             <div className="flex items-start gap-3">
               <img
                 src="data:image/png;base64,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"
@@ -4609,7 +4812,7 @@ export default function Home() {
               />
 
               <div>
-                <h3 className="font-bold text-violet-950">Importer directement depuis Pronote</h3>
+                <h3 className="text-sm font-bold text-violet-950">Importer depuis Pronote</h3>
                 <p className="mt-1 text-xs leading-relaxed text-violet-900">
                   Dans Pronote, va dans <strong>« Mes données »</strong>, puis
                   <strong> « Liste des élèves »</strong>. Clique ensuite sur l’icône
@@ -4623,16 +4826,6 @@ export default function Home() {
               (nom, prénom et sexe). Les autres données présentes dans l’export Pronote sont ignorées.
             </p>
           </div>
-
-          <label className="mt-3 block cursor-pointer rounded-lg bg-blue-600 p-2 text-center text-sm font-semibold text-white">
-            📂 Importer / remplacer par un CSV
-            <input
-              type="file"
-              accept=".csv,text/csv"
-              onChange={importerCSV}
-              className="hidden"
-            />
-          </label>
 
           <p className="mt-2 text-xs text-gray-500">
             Compatible avec les exports CSV de Pronote ainsi qu’avec un CSV classique
@@ -4741,7 +4934,18 @@ export default function Home() {
                             : "border-gray-200 bg-white text-gray-300")
                     }
                   >
-                    <span className={eleve ? "" : "print:hidden"}>
+                    <span
+                      className={
+                        eleve
+                          ? "max-w-full leading-tight " +
+                            (nomCourt(eleve, eleves).length >= 19
+                              ? "text-[9px]"
+                              : nomCourt(eleve, eleves).length >= 15
+                                ? "text-[10px]"
+                                : "text-xs")
+                          : "print:hidden"
+                      }
+                    >
                       {eleve ? nomCourt(eleve, eleves) : "Libre"}
                     </span>
 
@@ -4951,14 +5155,16 @@ export default function Home() {
                 Choisis un placement simple, ou utilise le placement intelligent avec les règles ci-dessous.
               </p>
 
-              <button
-                onClick={ordreAlphabetiquePrenom}
-                disabled={modeSelectionSeparation || modeSelectionGroupement}
-                className="mt-4 w-full rounded-lg bg-sky-600 p-3 font-bold text-white shadow-sm transition hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                <span className="block">🔤 Placement alphabétique</span>
-                <span className="mt-0.5 block text-[11px] font-medium text-sky-100">par prénom</span>
-              </button>
+              <div className="mt-4 px-3">
+                <button
+                  onClick={ordreAlphabetiquePrenom}
+                  disabled={modeSelectionSeparation || modeSelectionGroupement}
+                  className="w-full rounded-lg bg-sky-600 p-3 font-bold text-white shadow-sm transition hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <span className="block">🔤 Placement alphabétique</span>
+                  <span className="mt-0.5 block text-[11px] font-medium text-sky-100">par prénom</span>
+                </button>
+              </div>
 
               <div className="mt-4 rounded-xl border-2 border-indigo-200 bg-white p-3 shadow-sm">
                 <button

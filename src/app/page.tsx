@@ -257,12 +257,14 @@ function creerDisposition44(nombreRangees = 6): Place[] {
 function creerDispositionIlots4(): Place[] {
   const positions: { x: number; y: number }[] = [];
 
-  // 8 îlots de 4 = 32 places.
-  // Chaque îlot forme un carré de 2 x 2 tables.
-  [14, 38, 62, 86].forEach(function (centreX) {
-    [30, 70].forEach(function (centreY) {
-      [-4, 4].forEach(function (dx) {
-        [-6, 6].forEach(function (dy) {
+  // 9 îlots de 4 = 36 places.
+  // Les espacements internes sont volontairement un peu plus larges que dans
+  // les autres dispositions afin d'éviter que les cartes se chevauchent dans
+  // l'éditeur de salle et dans le Plan général.
+  [20, 50, 80].forEach(function (centreX) {
+    [20, 50, 80].forEach(function (centreY) {
+      [-5, 5].forEach(function (dx) {
+        [-7.5, 7.5].forEach(function (dy) {
           positions.push({
             x: centreX + dx,
             y: centreY + dy,
@@ -286,17 +288,26 @@ function creerDispositionIlots4(): Place[] {
 function creerDispositionIlots5(): Place[] {
   const positions: { x: number; y: number }[] = [];
 
-  // 6 îlots de 5 = 30 places.
-  // Deux tables sur la rangée du haut et trois sur celle du bas.
-  [20, 50, 80].forEach(function (centreX) {
-    [30, 70].forEach(function (centreY) {
-      positions.push({ x: centreX - 4, y: centreY - 6 });
-      positions.push({ x: centreX + 4, y: centreY - 6 });
+  // 7 îlots de 5 = 35 places.
+  // Chaque îlot utilise deux tables en haut et trois en bas, avec davantage
+  // d'espace horizontal et vertical pour garder les cartes bien lisibles.
+  const centres = [
+    { x: 20, y: 20 },
+    { x: 50, y: 20 },
+    { x: 80, y: 20 },
+    { x: 35, y: 50 },
+    { x: 65, y: 50 },
+    { x: 35, y: 80 },
+    { x: 65, y: 80 },
+  ];
 
-      positions.push({ x: centreX - 8, y: centreY + 6 });
-      positions.push({ x: centreX, y: centreY + 6 });
-      positions.push({ x: centreX + 8, y: centreY + 6 });
-    });
+  centres.forEach(function (centre) {
+    positions.push({ x: centre.x - 5, y: centre.y - 7.5 });
+    positions.push({ x: centre.x + 5, y: centre.y - 7.5 });
+
+    positions.push({ x: centre.x - 10, y: centre.y + 7.5 });
+    positions.push({ x: centre.x, y: centre.y + 7.5 });
+    positions.push({ x: centre.x + 10, y: centre.y + 7.5 });
   });
 
   return positions.map(function (position, index) {
@@ -309,6 +320,7 @@ function creerDispositionIlots5(): Place[] {
     };
   });
 }
+
 
 function creerDispositionDeuxU(): Place[] {
   const positions: { x: number; y: number }[] = [];

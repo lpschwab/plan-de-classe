@@ -92,7 +92,7 @@ const EMPLACEMENTS_DROITE = [76, 84, 92];
 const FRONTIERE_GAUCHE_CENTRE = 31;
 const FRONTIERE_CENTRE_DROITE = 69;
 
-const POINTS_X = Array.from({ length: 43 }, (_, index) => 8 + index * 2);
+const POINTS_X = Array.from({ length: 87 }, (_, index) => 7 + index);
 
 // La grille libre va désormais presque jusqu'en haut et en bas de la salle.
 // En déposant une table sur une nouvelle ligne à 6 % ou 94 %, le nombre de
@@ -258,13 +258,13 @@ function creerDispositionIlots4(): Place[] {
   const positions: { x: number; y: number }[] = [];
 
   // 9 îlots de 4 = 36 places.
-  // Les cartes d'un même îlot sont volontairement presque jointives :
-  // elles se touchent visuellement sans se superposer, aussi bien dans
-  // l'éditeur de salle que dans le Plan général.
+  // Les cartes sont presque bord à bord : 6 unités horizontalement et
+  // 12 verticalement. Ces valeurs sont également autorisées par le glisser-
+  // déposer, ce qui permet de sortir puis de recoller une table à son îlot.
   [20, 50, 80].forEach(function (centreX) {
     [20, 50, 80].forEach(function (centreY) {
-      [-3.35, 3.35].forEach(function (dx) {
-        [-6.4, 6.4].forEach(function (dy) {
+      [-3, 3].forEach(function (dx) {
+        [-6, 6].forEach(function (dy) {
           positions.push({
             x: centreX + dx,
             y: centreY + dy,
@@ -289,9 +289,8 @@ function creerDispositionIlots5(): Place[] {
   const positions: { x: number; y: number }[] = [];
 
   // 7 îlots de 5 = 35 places.
-  // Deux tables en haut et trois en bas. Les écarts internes correspondent
-  // approximativement à la largeur/hauteur d'une carte : l'îlot reste compact
-  // sans provoquer de chevauchement à l'écran.
+  // Deux tables en haut et trois en bas. Les cartes sont compactes et utilisent
+  // les mêmes espacements que le système de glisser-déposer.
   const centres = [
     { x: 20, y: 20 },
     { x: 50, y: 20 },
@@ -303,12 +302,12 @@ function creerDispositionIlots5(): Place[] {
   ];
 
   centres.forEach(function (centre) {
-    positions.push({ x: centre.x - 3.35, y: centre.y - 6.4 });
-    positions.push({ x: centre.x + 3.35, y: centre.y - 6.4 });
+    positions.push({ x: centre.x - 3, y: centre.y - 6 });
+    positions.push({ x: centre.x + 3, y: centre.y - 6 });
 
-    positions.push({ x: centre.x - 6.7, y: centre.y + 6.4 });
-    positions.push({ x: centre.x, y: centre.y + 6.4 });
-    positions.push({ x: centre.x + 6.7, y: centre.y + 6.4 });
+    positions.push({ x: centre.x - 6, y: centre.y + 6 });
+    positions.push({ x: centre.x, y: centre.y + 6 });
+    positions.push({ x: centre.x + 6, y: centre.y + 6 });
   });
 
   return positions.map(function (position, index) {
@@ -3434,6 +3433,58 @@ export default function Home() {
       decalageY += meilleurAjustementY;
     }
 
+    /*
+      Aimant "bord à bord" pour les îlots : après l'alignement des axes,
+      si une table arrive près du côté gauche ou droit d'une autre table,
+      on lui propose automatiquement une position compacte à 6 unités.
+      Cela permet de remettre intuitivement une table dans un îlot.
+    */
+    if (selection.length === 1) {
+      const placeSelectionnee = selection[0];
+      const xProjete = placeSelectionnee.x + decalageX;
+      const yProjete = placeSelectionnee.y + decalageY;
+
+      let meilleurCollage:
+        | {
+            ajustementX: number;
+            ajustementY: number;
+            cibleX: number;
+            cibleY: number;
+            distance: number;
+          }
+        | null = null;
+
+      autresTables.forEach(function (autre) {
+        [-6, 6].forEach(function (ecartX) {
+          const cibleX = autre.x + ecartX;
+          const cibleY = autre.y;
+          const dx = cibleX - xProjete;
+          const dy = cibleY - yProjete;
+          const distance = Math.sqrt(dx * dx + dy * dy);
+
+          if (
+            distance <= 4.2 &&
+            (meilleurCollage === null || distance < meilleurCollage.distance)
+          ) {
+            meilleurCollage = {
+              ajustementX: dx,
+              ajustementY: dy,
+              cibleX,
+              cibleY,
+              distance,
+            };
+          }
+        });
+      });
+
+      if (meilleurCollage !== null) {
+        decalageX += meilleurCollage.ajustementX;
+        decalageY += meilleurCollage.ajustementY;
+        repereX = meilleurCollage.cibleX;
+        repereY = meilleurCollage.cibleY;
+      }
+    }
+
     return {
       idsSelectionnes,
       decalageX,
@@ -3551,7 +3602,7 @@ export default function Home() {
     const collision = nouvellesPositions.some(function (positionTable) {
       return autresTables.some(function (autre) {
         return (
-          Math.abs(positionTable.x - autre.x) < 7.5 &&
+          Math.abs(positionTable.x - autre.x) < 5.7 &&
           Math.abs(positionTable.y - autre.y) < 10
         );
       });
@@ -3963,7 +4014,7 @@ export default function Home() {
       }
 
       return (
-        Math.abs(cible.x - autre.x) < 7.5 &&
+        Math.abs(cible.x - autre.x) < 5.7 &&
         Math.abs(cible.y - autre.y) < 10
       );
     });

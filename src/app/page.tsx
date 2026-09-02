@@ -29,7 +29,7 @@ type GroupeProximite = {
   eleveIds: number[];
 };
 
-type ModeSalle = "classique" | "libre";
+type ModeSalle = "classique" | "classique44" | "libre";
 
 type VueExport = "aerienne" | "professeur";
 
@@ -97,7 +97,28 @@ const POINTS_X = Array.from({ length: 87 }, (_, index) => 7 + index);
 // La grille libre va désormais presque jusqu'en haut et en bas de la salle.
 // En déposant une table sur une nouvelle ligne à 6 % ou 94 %, le nombre de
 // rangées visibles augmente et la hauteur de la surface s’agrandit automatiquement.
-const POINTS_Y = Array.from({ length: 23 }, (_, index) => 6 + index * 4);
+const POINTS_Y = Array.from({ length: 89 }, (_, index) => 6 + index);
+
+function estModeClassique(mode: ModeSalle): boolean {
+  return mode === "classique" || mode === "classique44";
+}
+
+type ZoneSalle44 = "gauche" | "droite";
+
+function determinerZone44(x: number): ZoneSalle44 {
+  return x < 50 ? "gauche" : "droite";
+}
+
+function positionsPourBloc44(zone: ZoneSalle44, nombre: number): number[] {
+  const gauche = [18, 26, 34, 42];
+  const droite = [58, 66, 74, 82];
+
+  if (nombre <= 0) {
+    return [];
+  }
+
+  return (zone === "gauche" ? gauche : droite).slice(0, Math.min(4, nombre));
+}
 
 function creerIdentifiant(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -325,24 +346,25 @@ function creerDispositionIlots5(): Place[] {
 function creerDispositionDeuxU(): Place[] {
   const positions: { x: number; y: number }[] = [];
 
-  // U extérieur, ouvert vers le tableau : 17 places.
-  [16, 28, 40, 52, 64].forEach(function (y) {
-    positions.push({ x: 14, y });
-    positions.push({ x: 86, y });
+  // Double U plus compact : 25 places.
+  // Les écarts sont volontairement proches de la taille visuelle des cartes,
+  // afin d'éviter l'effet "tables dispersées".
+  [16, 25, 34, 43, 52].forEach(function (y) {
+    positions.push({ x: 18, y });
+    positions.push({ x: 82, y });
   });
 
-  [26, 34, 42, 50, 58, 66, 74].forEach(function (x) {
-    positions.push({ x, y: 80 });
+  [32, 38, 44, 50, 56, 62, 68].forEach(function (x) {
+    positions.push({ x, y: 64 });
   });
 
-  // U intérieur : 8 places. Total = 25.
-  [32, 44, 56].forEach(function (y) {
-    positions.push({ x: 34, y });
-    positions.push({ x: 66, y });
+  [28, 37, 46].forEach(function (y) {
+    positions.push({ x: 36, y });
+    positions.push({ x: 64, y });
   });
 
-  [46, 54].forEach(function (x) {
-    positions.push({ x, y: 68 });
+  [47, 53].forEach(function (x) {
+    positions.push({ x, y: 55 });
   });
 
   return positions.map(function (position, index) {
@@ -359,23 +381,26 @@ function creerDispositionDeuxU(): Place[] {
 function creerDispositionU(): Place[] {
   const positions: { x: number; y: number }[] = [];
 
-  // 24 places environ : 8 sur chaque côté et 8 au fond.
+  // 24 places : les cartes sont jointives sans se superposer.
+  // Un pas vertical de 8 % correspond mieux à la hauteur réelle des cartes
+  // dans l'éditeur que le pas de 7 % utilisé précédemment.
   [12, 20, 28, 36, 44, 52, 60, 68].forEach(function (y) {
     positions.push({
-      x: 20,
+      x: 22,
       y,
     });
 
     positions.push({
-      x: 84,
+      x: 78,
       y,
     });
   });
 
-  [28, 36, 44, 52, 60, 68, 76, 84].forEach(function (x) {
+  // Fond du U : espacement compact, proche du bord-à-bord horizontal.
+  [29, 35, 41, 47, 53, 59, 65, 71].forEach(function (x) {
     positions.push({
       x,
-      y: 80,
+      y: 76,
     });
   });
 
@@ -733,6 +758,100 @@ function deplacerTableClassique(
   resultat = normaliserBloc(resultat, departY, departZone);
 
   resultat = normaliserBloc(resultat, destinationY, destinationZone);
+
+  return resultat;
+}
+
+function tablesDuBloc44(
+  places: Place[],
+  y: number,
+  zone: ZoneSalle44,
+): Place[] {
+  return places
+    .filter(function (place) {
+      return Math.abs(place.y - y) < 0.6 && determinerZone44(place.x) === zone;
+    })
+    .sort(function (a, b) {
+      return a.x - b.x;
+    });
+}
+
+function normaliserBloc44(
+  places: Place[],
+  y: number,
+  zone: ZoneSalle44,
+): Place[] {
+  const bloc = tablesDuBloc44(places, y, zone);
+
+  if (bloc.length === 0 || bloc.length > 4) {
+    return places;
+  }
+
+  const positions = positionsPourBloc44(zone, bloc.length);
+  const positionParId = new Map<number, number>();
+
+  bloc.forEach(function (place, index) {
+    positionParId.set(place.id, positions[index]);
+  });
+
+  return places.map(function (place) {
+    const nouvellePosition = positionParId.get(place.id);
+
+    if (nouvellePosition === undefined) {
+      return place;
+    }
+
+    return {
+      ...place,
+      x: nouvellePosition,
+      y,
+    };
+  });
+}
+
+function deplacerTableClassique44(
+  places: Place[],
+  tableId: number,
+  destinationY: number,
+  destinationZone: ZoneSalle44,
+): Place[] | null {
+  const table = places.find(function (place) {
+    return place.id === tableId;
+  });
+
+  if (!table) {
+    return null;
+  }
+
+  const departY = table.y;
+  const departZone = determinerZone44(table.x);
+
+  const tablesDestination = tablesDuBloc44(
+    places.filter(function (place) {
+      return place.id !== tableId;
+    }),
+    destinationY,
+    destinationZone,
+  );
+
+  if (tablesDestination.length >= 4) {
+    return null;
+  }
+
+  let resultat = places.map(function (place) {
+    if (place.id !== tableId) {
+      return { ...place };
+    }
+
+    return {
+      ...place,
+      x: destinationZone === "gauche" ? 30 : 70,
+      y: destinationY,
+    };
+  });
+
+  resultat = normaliserBloc44(resultat, departY, departZone);
+  resultat = normaliserBloc44(resultat, destinationY, destinationZone);
 
   return resultat;
 }
@@ -1773,130 +1892,178 @@ export default function Home() {
 
   const hauteurSallePixels = Math.max(
     420,
-    140 + Math.max(1, nombreRangeesSalle) * 75,
+    125 + Math.max(1, nombreRangeesSalle) * 70,
   );
 
-  // À l'écran, la grille de suivi rend les cartes un peu plus hautes.
-  // On augmente seulement la hauteur du Plan général pour éviter tout
-  // chevauchement. L'export possède déjà sa propre mise en page compacte.
-  const hauteurPlanPixels = grilleSuiviActive
-    ? hauteurSallePixels + 90
-    : hauteurSallePixels;
+  /*
+    Nouveau moteur de présentation commun à "Plan général" et au PDF.
 
-  // Dans le Plan général, on réduit automatiquement les marges latérales
-  // laissées dans l'éditeur de salle. La géométrie relative de la salle
-  // est conservée, mais l'ensemble est étiré pour occuper la largeur
-  // du tableau (de 8 % à 92 %). L'éditeur de salle, lui, ne change pas.
-  const positionsXPlan = places.map(function (place) {
-    return place.x;
-  });
+    L'éditeur de salle conserve les coordonnées choisies par l'utilisateur.
+    Pour l'affichage / impression, on reconstruit simplement deux axes
+    (horizontal et vertical) à partir des espacements réels :
 
-  const minimumXPlan =
-    positionsXPlan.length > 0 ? Math.min(...positionsXPlan) : 8;
+    - deux tables voisines = 1 largeur/hauteur de carte ;
+    - un vrai couloir ou un espace entre groupes = environ 1,3 à 1,65 carte ;
+    - le tout est ensuite centré avec une marge de sécurité.
 
-  const maximumXPlan =
-    positionsXPlan.length > 0 ? Math.max(...positionsXPlan) : 92;
-
-  function positionXPourPlan(x: number): number {
-    const largeurUtilisee = maximumXPlan - minimumXPlan;
-
-    if (largeurUtilisee < 0.5) {
-      return 50;
-    }
-
-    return 8 + ((x - minimumXPlan) / largeurUtilisee) * 84;
-  }
-
-  // Pour l'export uniquement, on compacte les grands espaces horizontaux
-  // (les couloirs) afin de laisser davantage de place aux cartes élèves.
-  // Le mode classique est compacté plus fortement car ses grands écarts
-  // correspondent presque toujours à des couloirs. En mode libre, la
-  // compression reste plus douce afin de respecter le bricolage de la salle.
-  const positionsXUniquesExport = Array.from(
-    new Set(
-      places.map(function (place) {
-        return Number(place.x.toFixed(2));
-      }),
-    ),
-  ).sort(function (a, b) {
-    return a - b;
-  });
-
-  const ecartsXExport = positionsXUniquesExport
-    .slice(1)
-    .map(function (x, index) {
-      return x - positionsXUniquesExport[index];
-    })
-    .filter(function (ecart) {
-      return ecart > 0.5;
-    })
-    .sort(function (a, b) {
+    Conséquences :
+    - les tables d'un même bloc/îlot peuvent réellement se toucher ;
+    - les couloirs restent visibles mais ne gaspillent pas la page ;
+    - aucune carte ne touche les bords ;
+    - l'écran Plan et le PDF utilisent exactement la même géométrie.
+  */
+  function construireAxePresentation(
+    valeursBrutes: number[],
+    debut: number,
+    fin: number,
+  ) {
+    const valeurs = Array.from(
+      new Set(
+        valeursBrutes.map(function (valeur) {
+          return Number(valeur.toFixed(2));
+        }),
+      ),
+    ).sort(function (a, b) {
       return a - b;
     });
 
-  const ecartBaseExport =
-    ecartsXExport.length > 0
-      ? ecartsXExport[Math.floor((ecartsXExport.length - 1) / 2)]
-      : 8;
+    const positionParValeur = new Map<number, number>();
 
-  const ecartMaxExport =
-    ecartBaseExport * (modeSalle === "classique" ? 1.15 : 1.55);
-
-  const positionCompacteeParX = new Map<number, number>();
-
-  if (positionsXUniquesExport.length === 1) {
-    positionCompacteeParX.set(positionsXUniquesExport[0], 50);
-  } else if (positionsXUniquesExport.length > 1) {
-    const positionsCumulees: number[] = [0];
-
-    for (let index = 1; index < positionsXUniquesExport.length; index++) {
-      const ecartOriginal =
-        positionsXUniquesExport[index] - positionsXUniquesExport[index - 1];
-
-      positionsCumulees.push(
-        positionsCumulees[index - 1] + Math.min(ecartOriginal, ecartMaxExport),
-      );
+    if (valeurs.length === 0) {
+      return {
+        positionParValeur,
+        pasCartePourcent: fin - debut,
+      };
     }
 
-    const largeurCompactee =
-      positionsCumulees[positionsCumulees.length - 1] || 1;
+    if (valeurs.length === 1) {
+      positionParValeur.set(valeurs[0], (debut + fin) / 2);
 
-    positionsXUniquesExport.forEach(function (x, index) {
-      // On garde un peu moins de marge qu'à l'écran pour profiter au maximum
-      // de la largeur de la page imprimée.
-      const position = 6 + (positionsCumulees[index] / largeurCompactee) * 88;
-      positionCompacteeParX.set(x, position);
+      return {
+        positionParValeur,
+        pasCartePourcent: Math.min(14, fin - debut),
+      };
+    }
+
+    const ecarts = valeurs.slice(1).map(function (valeur, index) {
+      return valeur - valeurs[index];
     });
+
+    const ecartsPositifs = ecarts
+      .filter(function (ecart) {
+        return ecart > 0.4;
+      })
+      .sort(function (a, b) {
+        return a - b;
+      });
+
+    const ecartBase = ecartsPositifs.length > 0 ? ecartsPositifs[0] : 8;
+
+    const facteurs = ecarts.map(function (ecart) {
+      const ratio = ecart / Math.max(ecartBase, 0.5);
+
+      // Même groupe / même bloc : on conserve l'écart relatif.
+      if (ratio <= 1.35) {
+        return Math.max(0.75, ratio);
+      }
+
+      // Vrai couloir / espace entre groupes : visible, mais compact.
+      return Math.min(1.65, 1.22 + (ratio - 1.35) * 0.12);
+    });
+
+    const totalFacteurs = facteurs.reduce(function (total, facteur) {
+      return total + facteur;
+    }, 0);
+
+    /*
+      +1 correspond à la largeur d'une carte : ainsi la première et la
+      dernière carte restent entièrement à l'intérieur des marges.
+    */
+    const pasCartePourcent =
+      (fin - debut) / Math.max(1, totalFacteurs + 1);
+
+    let positionCourante = debut + pasCartePourcent / 2;
+    positionParValeur.set(valeurs[0], positionCourante);
+
+    for (let index = 1; index < valeurs.length; index++) {
+      positionCourante += facteurs[index - 1] * pasCartePourcent;
+      positionParValeur.set(valeurs[index], positionCourante);
+    }
+
+    return {
+      positionParValeur,
+      pasCartePourcent,
+    };
+  }
+
+  const axeXPresentation = construireAxePresentation(
+    places.map(function (place) {
+      return place.x;
+    }),
+    5,
+    95,
+  );
+
+  const axeYPresentation = construireAxePresentation(
+    places.map(function (place) {
+      return place.y;
+    }),
+    15,
+    96,
+  );
+
+  function positionXPourPlan(x: number): number {
+    const xArrondi = Number(x.toFixed(2));
+    const exacte = axeXPresentation.positionParValeur.get(xArrondi);
+
+    if (exacte !== undefined) {
+      return exacte;
+    }
+
+    return 50;
+  }
+
+  function positionYPourPlan(y: number): number {
+    const yArrondi = Number(y.toFixed(2));
+    const exacte = axeYPresentation.positionParValeur.get(yArrondi);
+
+    if (exacte !== undefined) {
+      return exacte;
+    }
+
+    return 55;
   }
 
   function positionXPourExport(x: number): number {
-    if (positionsXUniquesExport.length === 0) {
-      return positionXPourPlan(x);
-    }
-
-    const xArrondi = Number(x.toFixed(2));
-    const positionExacte = positionCompacteeParX.get(xArrondi);
-
-    if (positionExacte !== undefined) {
-      return positionExacte;
-    }
-
-    // Cas de secours pour une table dont la coordonnée n'aurait pas été
-    // retrouvée exactement après un déplacement en mode libre.
-    let xLePlusProche = positionsXUniquesExport[0];
-    let meilleureDistance = Math.abs(xArrondi - xLePlusProche);
-
-    positionsXUniquesExport.forEach(function (candidat) {
-      const distance = Math.abs(xArrondi - candidat);
-
-      if (distance < meilleureDistance) {
-        xLePlusProche = candidat;
-        meilleureDistance = distance;
-      }
-    });
-
-    return positionCompacteeParX.get(xLePlusProche) ?? positionXPourPlan(x);
+    return positionXPourPlan(x);
   }
+
+  const largeurCartePlanPourcent = Math.min(
+    14,
+    Math.max(6.5, axeXPresentation.pasCartePourcent),
+  );
+
+  const hauteurCartePlanSouhaitee = grilleSuiviActive ? 80 : 64;
+
+  /*
+    La hauteur du cadre est calculée à partir du pas vertical obtenu.
+    On évite ainsi le chevauchement des îlots sans ajouter un grand espace
+    vide sous le plan.
+  */
+  const hauteurPlanPixels = Math.max(
+    400,
+    Math.ceil(
+      (hauteurCartePlanSouhaitee * 100) /
+        Math.max(axeYPresentation.pasCartePourcent, 1),
+    ),
+  );
+
+  const hauteurCartePlanPixels = hauteurCartePlanSouhaitee;
+
+  const hauteurCarteExportPourcent = Math.min(
+    axeYPresentation.pasCartePourcent * 0.98,
+    14,
+  );
 
   function obtenirEleve(id: number | null): Eleve | null {
     if (id === null) {
@@ -3070,7 +3237,7 @@ export default function Home() {
   }
 
   function ajouterRangeeSalle() {
-    if (modeSalle !== "classique" || nombreRangeesSalle >= 8) {
+    if (!estModeClassique(modeSalle) || nombreRangeesSalle >= 8) {
       return;
     }
 
@@ -3106,7 +3273,7 @@ export default function Home() {
   }
 
   function supprimerDerniereRangeeSalle() {
-    if (modeSalle !== "classique" || nombreRangeesSalle <= 1) {
+    if (!estModeClassique(modeSalle) || nombreRangeesSalle <= 1) {
       return;
     }
 
@@ -3146,7 +3313,7 @@ export default function Home() {
         return Math.max(maximum, place.id);
       }, 0) + 1;
 
-    if (modeSalle === "classique") {
+    if (estModeClassique(modeSalle)) {
       const rangees = Array.from(
         new Set(
           places.map(function (place) {
@@ -3156,6 +3323,37 @@ export default function Home() {
       ).sort(function (a, b) {
         return a - b;
       });
+
+      if (modeSalle === "classique44") {
+        for (const y of rangees) {
+          for (const zone of ["gauche", "droite"] as ZoneSalle44[]) {
+            const bloc = tablesDuBloc44(places, y, zone);
+
+            if (bloc.length >= 4) {
+              continue;
+            }
+
+            memoriserEtatSalle();
+
+            let nouvellesPlaces: Place[] = [
+              ...places,
+              {
+                id: prochainId,
+                x: zone === "gauche" ? 30 : 70,
+                y,
+                eleveId: null,
+                verrouillee: false,
+              },
+            ];
+
+            nouvellesPlaces = normaliserBloc44(nouvellesPlaces, y, zone);
+            setPlaces(nouvellesPlaces);
+            return;
+          }
+        }
+
+        return;
+      }
 
       for (const y of rangees) {
         for (const zone of ["gauche", "centre", "droite"] as ZoneSalle[]) {
@@ -3247,7 +3445,7 @@ export default function Home() {
       return !tablesSelectionnees.includes(place.id);
     });
 
-    if (modeSalle === "classique") {
+    if (estModeClassique(modeSalle)) {
       nouvellesPlaces = normaliserToutesLesRangees(nouvellesPlaces);
     }
 
@@ -3371,10 +3569,6 @@ export default function Home() {
     );
 
     const position = positionDansSalle(clientX, clientY);
-    const cibleGrille = trouverPointGrilleLePlusProche(position.x, position.y);
-
-    let decalageX = cibleGrille.x - tableAncre.x;
-    let decalageY = cibleGrille.y - tableAncre.y;
 
     const selection = places.filter(function (place) {
       return idsSelectionnes.has(place.id);
@@ -3385,42 +3579,74 @@ export default function Home() {
     });
 
     /*
-      Aimant d'alignement : si une table déplacée passe à proximité
-      de l'axe horizontal ou vertical d'une autre table, tout le groupe
-      s'aligne précisément sur cet axe.
+      Principe du mode libre :
+      1. la table suit d'abord exactement la souris ;
+      2. si son centre approche d'un axe déjà utilisé par une autre table,
+         elle s'aligne sur CET axe ;
+      3. l'axe X et l'axe Y sont choisis indépendamment parmi les coordonnées
+         réellement présentes dans la salle.
+
+      Cela permet notamment d'aligner une table avec celle qui est juste à côté,
+      mais aussi avec une table située plusieurs rangées plus bas.
     */
-    const SEUIL_AIMANT = 2.8;
+    let decalageX = position.x - tableAncre.x;
+    let decalageY = position.y - tableAncre.y;
 
-    let meilleurAjustementX: number | null = null;
+    const SEUIL_ALIGNEMENT = 2.8;
+
     let repereX: number | null = null;
-
-    let meilleurAjustementY: number | null = null;
     let repereY: number | null = null;
+
+    const valeursX = Array.from(
+      new Set(
+        autresTables.map(function (place) {
+          return Number(place.x.toFixed(2));
+        }),
+      ),
+    );
+
+    const valeursY = Array.from(
+      new Set(
+        autresTables.map(function (place) {
+          return Number(place.y.toFixed(2));
+        }),
+      ),
+    );
+
+    /*
+      Pour une sélection multiple, on teste chaque table sélectionnée.
+      Le guide retenu est toujours celui qui nécessite le plus petit mouvement.
+    */
+    let meilleurAjustementX: number | null = null;
+    let meilleurAjustementY: number | null = null;
 
     selection.forEach(function (placeSelectionnee) {
       const xProjete = placeSelectionnee.x + decalageX;
       const yProjete = placeSelectionnee.y + decalageY;
 
-      autresTables.forEach(function (autre) {
-        const ajustementX = autre.x - xProjete;
-        const ajustementY = autre.y - yProjete;
+      valeursX.forEach(function (xCible) {
+        const ajustement = xCible - xProjete;
 
         if (
-          Math.abs(ajustementX) <= SEUIL_AIMANT &&
+          Math.abs(ajustement) <= SEUIL_ALIGNEMENT &&
           (meilleurAjustementX === null ||
-            Math.abs(ajustementX) < Math.abs(meilleurAjustementX))
+            Math.abs(ajustement) < Math.abs(meilleurAjustementX))
         ) {
-          meilleurAjustementX = ajustementX;
-          repereX = autre.x;
+          meilleurAjustementX = ajustement;
+          repereX = xCible;
         }
+      });
+
+      valeursY.forEach(function (yCible) {
+        const ajustement = yCible - yProjete;
 
         if (
-          Math.abs(ajustementY) <= SEUIL_AIMANT &&
+          Math.abs(ajustement) <= SEUIL_ALIGNEMENT &&
           (meilleurAjustementY === null ||
-            Math.abs(ajustementY) < Math.abs(meilleurAjustementY))
+            Math.abs(ajustement) < Math.abs(meilleurAjustementY))
         ) {
-          meilleurAjustementY = ajustementY;
-          repereY = autre.y;
+          meilleurAjustementY = ajustement;
+          repereY = yCible;
         }
       });
     });
@@ -3434,27 +3660,34 @@ export default function Home() {
     }
 
     /*
-      Aimant "bord à bord" pour les îlots : après l'alignement des axes,
-      si une table arrive près du côté gauche ou droit d'une autre table,
-      on lui propose automatiquement une position compacte à 6 unités.
-      Cela permet de remettre intuitivement une table dans un îlot.
+      Aimant spécial "îlot" : bord à bord horizontal à 6 unités.
+      Il ne s'active que si :
+      - une seule table est déplacée ;
+      - aucun alignement de centre X n'est déjà proposé ;
+      - la table est presque exactement sur la même rangée.
+
+      Il ne peut donc plus perturber la reconstruction de rangées simples.
     */
-    if (selection.length === 1) {
+    if (selection.length === 1 && repereX === null) {
       const placeSelectionnee = selection[0];
       const xProjete = placeSelectionnee.x + decalageX;
       const yProjete = placeSelectionnee.y + decalageY;
 
       let meilleurCollage:
         | {
-            ajustementX: number;
-            ajustementY: number;
-            cibleX: number;
-            cibleY: number;
+            dx: number;
+            dy: number;
+            x: number;
+            y: number;
             distance: number;
           }
         | null = null;
 
       for (const autre of autresTables) {
+        if (Math.abs(autre.y - yProjete) > 1.2) {
+          continue;
+        }
+
         for (const ecartX of [-6, 6]) {
           const cibleX = autre.x + ecartX;
           const cibleY = autre.y;
@@ -3463,14 +3696,15 @@ export default function Home() {
           const distance = Math.sqrt(dx * dx + dy * dy);
 
           if (
-            distance <= 4.2 &&
+            Math.abs(dx) <= 1.8 &&
+            distance <= 2.1 &&
             (meilleurCollage === null || distance < meilleurCollage.distance)
           ) {
             meilleurCollage = {
-              ajustementX: dx,
-              ajustementY: dy,
-              cibleX,
-              cibleY,
+              dx,
+              dy,
+              x: cibleX,
+              y: cibleY,
               distance,
             };
           }
@@ -3478,11 +3712,82 @@ export default function Home() {
       }
 
       if (meilleurCollage) {
-        decalageX += meilleurCollage.ajustementX;
-        decalageY += meilleurCollage.ajustementY;
-        repereX = meilleurCollage.cibleX;
-        repereY = meilleurCollage.cibleY;
+        decalageX += meilleurCollage.dx;
+        decalageY += meilleurCollage.dy;
+        repereX = meilleurCollage.x;
+        repereY = meilleurCollage.y;
       }
+
+      /*
+        Même principe vertical pour les côtés d'un U :
+        lorsqu'une table est déjà presque sur la même colonne qu'une autre,
+        elle peut se recoller au-dessus ou au-dessous à 7 unités.
+      */
+      if (repereY === null) {
+        const xApresCollage = placeSelectionnee.x + decalageX;
+        const yApresCollage = placeSelectionnee.y + decalageY;
+
+        let meilleurCollageVertical:
+          | {
+              dx: number;
+              dy: number;
+              x: number;
+              y: number;
+              distance: number;
+            }
+          | null = null;
+
+        for (const autre of autresTables) {
+          if (Math.abs(autre.x - xApresCollage) > 1.2) {
+            continue;
+          }
+
+          for (const ecartY of [-7, 7]) {
+            const cibleX = autre.x;
+            const cibleY = autre.y + ecartY;
+            const dx = cibleX - xApresCollage;
+            const dy = cibleY - yApresCollage;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+
+            if (
+              Math.abs(dy) <= 2 &&
+              distance <= 2.3 &&
+              (meilleurCollageVertical === null ||
+                distance < meilleurCollageVertical.distance)
+            ) {
+              meilleurCollageVertical = {
+                dx,
+                dy,
+                x: cibleX,
+                y: cibleY,
+                distance,
+              };
+            }
+          }
+        }
+
+        if (meilleurCollageVertical) {
+          decalageX += meilleurCollageVertical.dx;
+          decalageY += meilleurCollageVertical.dy;
+          repereX = meilleurCollageVertical.x;
+          repereY = meilleurCollageVertical.y;
+        }
+      }
+    }
+
+    /*
+      Sans guide, on garde simplement la position de la souris arrondie au
+      pourcent le plus proche. La grille n'est plus affichée à l'écran.
+    */
+    const xFinalBrut = tableAncre.x + decalageX;
+    const yFinalBrut = tableAncre.y + decalageY;
+
+    if (repereX === null) {
+      decalageX += Math.round(xFinalBrut) - xFinalBrut;
+    }
+
+    if (repereY === null) {
+      decalageY += Math.round(yFinalBrut) - yFinalBrut;
     }
 
     return {
@@ -3501,7 +3806,7 @@ export default function Home() {
     }
 
     if (
-      modeSalle === "classique" &&
+      estModeClassique(modeSalle) &&
       tablesSelectionnees.length > 1 &&
       tablesSelectionnees.includes(tableDeplaceeId)
     ) {
@@ -3603,7 +3908,7 @@ export default function Home() {
       return autresTables.some(function (autre) {
         return (
           Math.abs(positionTable.x - autre.x) < 5.7 &&
-          Math.abs(positionTable.y - autre.y) < 10
+          Math.abs(positionTable.y - autre.y) < 6.4
         );
       });
     });
@@ -3756,7 +4061,7 @@ export default function Home() {
     clientY: number,
   ) {
     if (
-      modeSalle !== "classique" ||
+      !estModeClassique(modeSalle) ||
       tableDeplaceeId === null ||
       tablesSelectionnees.length <= 1 ||
       !tablesSelectionnees.includes(tableDeplaceeId)
@@ -3945,7 +4250,7 @@ export default function Home() {
 
     const position = positionDansSalle(clientX, clientY);
 
-    if (modeSalle === "classique") {
+    if (estModeClassique(modeSalle)) {
       const autresTables = places.filter(function (place) {
         return place.id !== tableDeplaceeId;
       });
@@ -3953,6 +4258,26 @@ export default function Home() {
       const rangeeY = trouverRangeeProche(position.y, autresTables);
 
       if (rangeeY !== null) {
+        if (modeSalle === "classique44") {
+          const zone44 = determinerZone44(position.x);
+
+          const nouvelleDisposition44 = deplacerTableClassique44(
+            places,
+            tableDeplaceeId,
+            rangeeY,
+            zone44,
+          );
+
+          if (nouvelleDisposition44) {
+            memoriserEtatSalle();
+            setPlaces(nouvelleDisposition44);
+          }
+
+          setTableDeplaceeId(null);
+          setReperesAlignement({ x: null, y: null });
+          return;
+        }
+
         const zone = determinerZone(position.x);
 
         const nouvelleDisposition = deplacerTableClassique(
@@ -4015,7 +4340,7 @@ export default function Home() {
 
       return (
         Math.abs(cible.x - autre.x) < 5.7 &&
-        Math.abs(cible.y - autre.y) < 10
+        Math.abs(cible.y - autre.y) < 6.4
       );
     });
 
@@ -4274,17 +4599,32 @@ export default function Home() {
         @media print {
           @page {
             size: A4 landscape;
-            margin: 10mm;
+            margin: 8mm;
           }
 
           .zone-plan-impression {
-            height: 170mm !important;
+            height: 154mm !important;
             min-height: 0 !important;
           }
 
           .place-plan-impression {
             left: var(--position-x-export) !important;
-            width: 24mm !important;
+            width: var(--largeur-carte-presentation) !important;
+            height: var(--hauteur-carte-export) !important;
+          }
+
+          .grille-suivi-impression {
+            grid-template-columns: repeat(
+              var(--colonnes-suivi),
+              3.6mm
+            ) !important;
+            gap: 0.7mm !important;
+          }
+
+          .grille-suivi-impression > span {
+            width: 3.6mm !important;
+            height: 3.6mm !important;
+            border-width: 0.25mm !important;
           }
 
           .impression-vue-professeur .place-plan-impression {
@@ -4380,12 +4720,10 @@ export default function Home() {
           </h2>
 
           <p className="mt-1 text-sm text-purple-800">
-            Déplace les tables, clique sur une table pour la sélectionner ou
-            trace un rectangle pour en sélectionner plusieurs. En mode libre, tu peux
-            aussi déposer une table tout en haut ou tout en bas : la surface s’agrandira
-            automatiquement, avec les mêmes repères d’alignement. En mode libre,
-            des repères apparaissent pendant le déplacement pour aligner
-            facilement les tables en lignes ou en colonnes.
+            Déplace les tables librement, sélectionne-les une par une ou par groupe,
+            et ajoute ou supprime des tables selon tes besoins. En mode libre, des
+            repères facilitent leur alignement. Tu peux aussi déposer une table tout
+            en haut ou tout en bas pour agrandir la salle.
           </p>
 
           <div className="mt-5 rounded-xl border border-purple-200 bg-purple-50/70 p-3">
@@ -4434,6 +4772,15 @@ export default function Home() {
                   >
                     2 | 2 | 2
                   </button>
+
+                  <button
+                    onClick={function () {
+                      appliquerDisposition(creerDisposition44(), "classique44");
+                    }}
+                    className="rounded-lg border border-purple-200 bg-white px-4 py-2.5 font-semibold text-purple-800 shadow-sm hover:bg-purple-50"
+                  >
+                    4 | 4
+                  </button>
                 </div>
               </div>
 
@@ -4446,15 +4793,6 @@ export default function Home() {
                 </div>
 
                 <div className="flex flex-wrap gap-2">
-                  <button
-                    onClick={function () {
-                      appliquerDisposition(creerDisposition44(), "libre");
-                    }}
-                    className="rounded-lg border border-indigo-200 bg-white px-4 py-2.5 font-semibold text-indigo-800 shadow-sm hover:bg-indigo-50"
-                  >
-                    4 | 4
-                  </button>
-
                   <button
                     onClick={function () {
                       appliquerDisposition(
@@ -4515,7 +4853,7 @@ export default function Home() {
               ➕ Ajouter une table
             </button>
 
-            {modeSalle === "classique" && (
+            {estModeClassique(modeSalle) && (
               <div className="flex items-center gap-2 rounded-lg border border-purple-200 bg-white px-2 py-1.5 text-sm text-purple-900">
                 <button
                   onClick={supprimerDerniereRangeeSalle}
@@ -4604,21 +4942,7 @@ export default function Home() {
                   />
                 )}
 
-              {tableDeplaceeId !== null &&
-                POINTS_Y.flatMap(function (y) {
-                  return POINTS_X.map(function (x) {
-                    return (
-                      <div
-                        key={`${x}-${y}`}
-                        style={{
-                          left: x + "%",
-                          top: y + "%",
-                        }}
-                        className="pointer-events-none absolute h-1 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-purple-500 opacity-15"
-                      />
-                    );
-                  });
-                })}
+
 
               {rectangleSelection && (
                 <div
@@ -5039,7 +5363,7 @@ export default function Home() {
             </div>
 
             <div
-              style={{ minHeight: hauteurPlanPixels + "px" }}
+              style={{ height: hauteurPlanPixels + "px" }}
               className={
                 "zone-plan-impression relative overflow-hidden rounded-xl border bg-gray-50 print:bg-white " +
                 (vueExport === "professeur" ? "impression-vue-professeur" : "")
@@ -5090,17 +5414,23 @@ export default function Home() {
                     style={
                       {
                         left: positionXPourPlan(place.x) + "%",
-                        top: 12 + place.y * 0.84 + "%",
+                        top: positionYPourPlan(place.y) + "%",
                         ["--position-x" as any]:
                           positionXPourPlan(place.x) + "%",
                         ["--position-x-export" as any]:
                           positionXPourExport(place.x) + "%",
-                        ["--position-y" as any]: 12 + place.y * 0.84 + "%",
+                        ["--position-y" as any]:
+                          positionYPourPlan(place.y) + "%",
+                        ["--largeur-carte-presentation" as any]:
+                          largeurCartePlanPourcent + "%",
+                        ["--hauteur-carte-export" as any]:
+                          hauteurCarteExportPourcent + "%",
+                        width: largeurCartePlanPourcent + "%",
+                        height: hauteurCartePlanPixels + "px",
                       } as React.CSSProperties
                     }
                     className={
-                      "place-plan-impression absolute flex w-20 -translate-x-1/2 -translate-y-1/2 flex-col items-center justify-center rounded-md border px-1 text-center text-xs font-semibold shadow-sm " +
-                      (grilleSuiviActive ? "h-20 " : "h-16 ") +
+                      "place-plan-impression absolute flex -translate-x-1/2 -translate-y-1/2 flex-col items-center justify-center rounded-md border px-1 text-center text-xs font-semibold shadow-sm " +
                       (selectionneSeparation
                         ? "border-red-600 bg-red-100"
                         : selectionneGroupement
@@ -5129,12 +5459,17 @@ export default function Home() {
 
                     {eleve && grilleSuiviActive && (
                       <div
-                        className="mt-1 grid justify-center gap-[2px]"
-                        style={{
-                          gridTemplateColumns: `repeat(${Math.ceil(
-                            nombreCasesSuivi / 2,
-                          )}, 12px)`,
-                        }}
+                        className="grille-suivi-impression mt-1 grid justify-center gap-[2px]"
+                        style={
+                          {
+                            gridTemplateColumns: `repeat(${Math.ceil(
+                              nombreCasesSuivi / 2,
+                            )}, 12px)`,
+                            ["--colonnes-suivi" as any]: Math.ceil(
+                              nombreCasesSuivi / 2,
+                            ),
+                          } as React.CSSProperties
+                        }
                         aria-label={`Grille de suivi de ${nomCourt(eleve, eleves)}`}
                       >
                         {Array.from(

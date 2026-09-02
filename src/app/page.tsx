@@ -199,6 +199,37 @@ function creerDisposition232(nombreRangees = 6): Place[] {
   return places;
 }
 
+function creerDisposition222(nombreRangees = 6): Place[] {
+  const positionsX = [
+    8, 16,
+
+    46, 54,
+
+    84, 92,
+  ];
+
+  const positionsY = positionsYPourNombreRangees(nombreRangees);
+  const places: Place[] = [];
+
+  let id = 1;
+
+  positionsY.forEach(function (y) {
+    positionsX.forEach(function (x) {
+      places.push({
+        id,
+        x,
+        y,
+        eleveId: null,
+        verrouillee: false,
+      });
+
+      id++;
+    });
+  });
+
+  return places;
+}
+
 function creerDisposition44(nombreRangees = 6): Place[] {
   const positionsX = [18, 26, 34, 42, 58, 66, 74, 82];
   const positionsY = positionsYPourNombreRangees(nombreRangees);
@@ -221,6 +252,62 @@ function creerDisposition44(nombreRangees = 6): Place[] {
   });
 
   return places;
+}
+
+function creerDispositionIlots4(): Place[] {
+  const positions: { x: number; y: number }[] = [];
+
+  // 8 îlots de 4 = 32 places.
+  // Chaque îlot forme un carré de 2 x 2 tables.
+  [14, 38, 62, 86].forEach(function (centreX) {
+    [30, 70].forEach(function (centreY) {
+      [-4, 4].forEach(function (dx) {
+        [-6, 6].forEach(function (dy) {
+          positions.push({
+            x: centreX + dx,
+            y: centreY + dy,
+          });
+        });
+      });
+    });
+  });
+
+  return positions.map(function (position, index) {
+    return {
+      id: index + 1,
+      x: position.x,
+      y: position.y,
+      eleveId: null,
+      verrouillee: false,
+    };
+  });
+}
+
+function creerDispositionIlots5(): Place[] {
+  const positions: { x: number; y: number }[] = [];
+
+  // 6 îlots de 5 = 30 places.
+  // Deux tables sur la rangée du haut et trois sur celle du bas.
+  [20, 50, 80].forEach(function (centreX) {
+    [30, 70].forEach(function (centreY) {
+      positions.push({ x: centreX - 4, y: centreY - 6 });
+      positions.push({ x: centreX + 4, y: centreY - 6 });
+
+      positions.push({ x: centreX - 8, y: centreY + 6 });
+      positions.push({ x: centreX, y: centreY + 6 });
+      positions.push({ x: centreX + 8, y: centreY + 6 });
+    });
+  });
+
+  return positions.map(function (position, index) {
+    return {
+      id: index + 1,
+      x: position.x,
+      y: position.y,
+      eleveId: null,
+      verrouillee: false,
+    };
+  });
 }
 
 function creerDispositionDeuxU(): Place[] {
@@ -4274,6 +4361,15 @@ export default function Home() {
                   >
                     2 | 3 | 2
                   </button>
+
+                  <button
+                    onClick={function () {
+                      appliquerDisposition(creerDisposition222(), "classique");
+                    }}
+                    className="rounded-lg border border-purple-200 bg-white px-4 py-2.5 font-semibold text-purple-800 shadow-sm hover:bg-purple-50"
+                  >
+                    2 | 2 | 2
+                  </button>
                 </div>
               </div>
 
@@ -4305,6 +4401,24 @@ export default function Home() {
                     className="rounded-lg border border-indigo-200 bg-white px-4 py-2.5 font-semibold text-indigo-800 shadow-sm hover:bg-indigo-50"
                   >
                     Rangées simples
+                  </button>
+
+                  <button
+                    onClick={function () {
+                      appliquerDisposition(creerDispositionIlots4(), "libre");
+                    }}
+                    className="rounded-lg border border-indigo-200 bg-white px-4 py-2.5 font-semibold text-indigo-800 shadow-sm hover:bg-indigo-50"
+                  >
+                    Îlots de 4
+                  </button>
+
+                  <button
+                    onClick={function () {
+                      appliquerDisposition(creerDispositionIlots5(), "libre");
+                    }}
+                    className="rounded-lg border border-indigo-200 bg-white px-4 py-2.5 font-semibold text-indigo-800 shadow-sm hover:bg-indigo-50"
+                  >
+                    Îlots de 5
                   </button>
 
                   <button

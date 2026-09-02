@@ -258,13 +258,13 @@ function creerDispositionIlots4(): Place[] {
   const positions: { x: number; y: number }[] = [];
 
   // 9 îlots de 4 = 36 places.
-  // Les espacements internes sont volontairement un peu plus larges que dans
-  // les autres dispositions afin d'éviter que les cartes se chevauchent dans
-  // l'éditeur de salle et dans le Plan général.
+  // Les cartes d'un même îlot sont volontairement presque jointives :
+  // elles se touchent visuellement sans se superposer, aussi bien dans
+  // l'éditeur de salle que dans le Plan général.
   [20, 50, 80].forEach(function (centreX) {
     [20, 50, 80].forEach(function (centreY) {
-      [-5, 5].forEach(function (dx) {
-        [-7.5, 7.5].forEach(function (dy) {
+      [-3.35, 3.35].forEach(function (dx) {
+        [-6.4, 6.4].forEach(function (dy) {
           positions.push({
             x: centreX + dx,
             y: centreY + dy,
@@ -289,8 +289,9 @@ function creerDispositionIlots5(): Place[] {
   const positions: { x: number; y: number }[] = [];
 
   // 7 îlots de 5 = 35 places.
-  // Chaque îlot utilise deux tables en haut et trois en bas, avec davantage
-  // d'espace horizontal et vertical pour garder les cartes bien lisibles.
+  // Deux tables en haut et trois en bas. Les écarts internes correspondent
+  // approximativement à la largeur/hauteur d'une carte : l'îlot reste compact
+  // sans provoquer de chevauchement à l'écran.
   const centres = [
     { x: 20, y: 20 },
     { x: 50, y: 20 },
@@ -302,12 +303,12 @@ function creerDispositionIlots5(): Place[] {
   ];
 
   centres.forEach(function (centre) {
-    positions.push({ x: centre.x - 5, y: centre.y - 7.5 });
-    positions.push({ x: centre.x + 5, y: centre.y - 7.5 });
+    positions.push({ x: centre.x - 3.35, y: centre.y - 6.4 });
+    positions.push({ x: centre.x + 3.35, y: centre.y - 6.4 });
 
-    positions.push({ x: centre.x - 10, y: centre.y + 7.5 });
-    positions.push({ x: centre.x, y: centre.y + 7.5 });
-    positions.push({ x: centre.x + 10, y: centre.y + 7.5 });
+    positions.push({ x: centre.x - 6.7, y: centre.y + 6.4 });
+    positions.push({ x: centre.x, y: centre.y + 6.4 });
+    positions.push({ x: centre.x + 6.7, y: centre.y + 6.4 });
   });
 
   return positions.map(function (position, index) {

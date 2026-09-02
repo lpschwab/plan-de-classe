@@ -3454,8 +3454,8 @@ export default function Home() {
           }
         | null = null;
 
-      autresTables.forEach(function (autre) {
-        [-6, 6].forEach(function (ecartX) {
+      for (const autre of autresTables) {
+        for (const ecartX of [-6, 6]) {
           const cibleX = autre.x + ecartX;
           const cibleY = autre.y;
           const dx = cibleX - xProjete;
@@ -3474,10 +3474,10 @@ export default function Home() {
               distance,
             };
           }
-        });
-      });
+        }
+      }
 
-      if (meilleurCollage !== null) {
+      if (meilleurCollage) {
         decalageX += meilleurCollage.ajustementX;
         decalageY += meilleurCollage.ajustementY;
         repereX = meilleurCollage.cibleX;

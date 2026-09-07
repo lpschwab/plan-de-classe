@@ -1082,6 +1082,51 @@ function calculerScoreBinomes(eleves: Eleve[], places: Place[]): ScoreBinomes {
   };
 }
 
+
+/*
+  Pour un binôme / trinôme, "à côté" signifie désormais strictement :
+  - même rangée ;
+  - voisin immédiat à gauche ou à droite ;
+  - pas de diagonale ;
+  - pas de table devant / derrière ;
+  - pas de voisinage à travers un couloir.
+*/
+function sontVoisinsImmediatsPourGroupement(
+  place1: Place,
+  place2: Place,
+  places: Place[],
+): boolean {
+  if (Math.abs(place1.y - place2.y) > 0.6) {
+    return false;
+  }
+
+  const ecartX = Math.abs(place1.x - place2.x);
+
+  // Les tables contiguës des dispositions fournies ont un écart horizontal
+  // d'environ 6 à 8 unités. 10 laisse un peu de souplesse en mode libre,
+  // sans permettre de franchir un couloir.
+  if (ecartX <= 0.1 || ecartX > 10) {
+    return false;
+  }
+
+  const minimumX = Math.min(place1.x, place2.x);
+  const maximumX = Math.max(place1.x, place2.x);
+
+  const tableEntreLesDeux = places.some(function (autre) {
+    if (autre.id === place1.id || autre.id === place2.id) {
+      return false;
+    }
+
+    return (
+      Math.abs(autre.y - place1.y) <= 0.6 &&
+      autre.x > minimumX &&
+      autre.x < maximumX
+    );
+  });
+
+  return !tableEntreLesDeux;
+}
+
 function contraintesNonRespectees(
   contraintes: ContrainteSeparation[],
   places: Place[],
@@ -1145,7 +1190,7 @@ function groupesProximiteNonRespectes(
           return;
         }
 
-        if (placesTropProches(actuelle, autre, places)) {
+        if (sontVoisinsImmediatsPourGroupement(actuelle, autre, places)) {
           visites.add(autre.id);
           aExplorer.push(autre);
         }
@@ -1492,6 +1537,279 @@ function evaluerPlan(
   };
 }
 
+
+function scoreContraintesFortes(
+  places: Place[],
+  contraintes: ContrainteSeparation[],
+  groupesProximite: GroupeProximite[],
+): number {
+  const violationsSeparation = contraintesNonRespectees(
+    contraintes,
+    places,
+  ).length;
+
+  const violationsGroupement = groupesProximiteNonRespectes(
+    groupesProximite,
+    places,
+  ).length;
+
+  // Un seul groupement non respecté est volontairement très coûteux :
+  // le moteur doit chercher d'abord à réaliser les binômes / trinômes et
+  // les séparations avant d'optimiser les autres critères.
+  return violationsSeparation * 10000 + violationsGroupement * 10000;
+}
+
+function echangerElevesEntrePlaces(
+  places: Place[],
+  place1Id: number,
+  place2Id: number,
+): Place[] {
+  const place1 = places.find(function (place) {
+    return place.id === place1Id;
+  });
+
+  const place2 = places.find(function (place) {
+    return place.id === place2Id;
+  });
+
+  if (!place1 || !place2 || place1.verrouillee || place2.verrouillee) {
+    return places;
+  }
+
+  const eleve1Id = place1.eleveId;
+  const eleve2Id = place2.eleveId;
+
+  return places.map(function (place) {
+    if (place.id === place1Id) {
+      return { ...place, eleveId: eleve2Id };
+    }
+
+    if (place.id === place2Id) {
+      return { ...place, eleveId: eleve1Id };
+    }
+
+    return { ...place };
+  });
+}
+
+function deplacerEleveVersPlaceParEchange(
+  places: Place[],
+  eleveId: number,
+  cibleId: number,
+): Place[] | null {
+  const source = places.find(function (place) {
+    return place.eleveId === eleveId;
+  });
+
+  const cible = places.find(function (place) {
+    return place.id === cibleId;
+  });
+
+  if (!source || !cible || source.id === cible.id) {
+    return places.map(function (place) {
+      return { ...place };
+    });
+  }
+
+  if (source.verrouillee || cible.verrouillee) {
+    return null;
+  }
+
+  return echangerElevesEntrePlaces(places, source.id, cible.id);
+}
+
+function groupesDePlacesVoisines(
+  places: Place[],
+  taille: number,
+): Place[][] {
+  const occupees = places.filter(function (place) {
+    return place.eleveId !== null;
+  });
+
+  if (taille === 2) {
+    const groupes: Place[][] = [];
+
+    for (let i = 0; i < occupees.length; i++) {
+      for (let j = i + 1; j < occupees.length; j++) {
+        if (
+          sontVoisinsImmediatsPourGroupement(
+            occupees[i],
+            occupees[j],
+            places,
+          )
+        ) {
+          groupes.push([occupees[i], occupees[j]]);
+        }
+      }
+    }
+
+    return groupes;
+  }
+
+  const groupes: Place[][] = [];
+
+  occupees.forEach(function (centre) {
+    const voisins = occupees.filter(function (autre) {
+      return (
+        autre.id !== centre.id &&
+        sontVoisinsImmediatsPourGroupement(centre, autre, places)
+      );
+    });
+
+    for (let i = 0; i < voisins.length; i++) {
+      for (let j = i + 1; j < voisins.length; j++) {
+        const ids = new Set([voisins[i].id, centre.id, voisins[j].id]);
+
+        if (ids.size === 3) {
+          groupes.push([voisins[i], centre, voisins[j]]);
+        }
+      }
+    }
+  });
+
+  // Supprime les doublons éventuels.
+  const vus = new Set<string>();
+
+  return groupes.filter(function (groupe) {
+    const cle = groupe
+      .map(function (place) {
+        return place.id;
+      })
+      .sort(function (a, b) {
+        return a - b;
+      })
+      .join("-");
+
+    if (vus.has(cle)) {
+      return false;
+    }
+
+    vus.add(cle);
+    return true;
+  });
+}
+
+function renforcerGroupementsEtSeparations(
+  planInitial: Place[],
+  contraintes: ContrainteSeparation[],
+  groupesProximite: GroupeProximite[],
+): Place[] {
+  let meilleurPlan = planInitial.map(function (place) {
+    return { ...place };
+  });
+
+  let meilleurScore = scoreContraintesFortes(
+    meilleurPlan,
+    contraintes,
+    groupesProximite,
+  );
+
+  // Plusieurs passes : placer un groupe peut libérer une meilleure solution
+  // pour le suivant, ou améliorer ensuite une séparation.
+  for (let passe = 0; passe < 4; passe++) {
+    let ameliorationPendantPasse = false;
+
+    const groupesEnErreur = groupesProximiteNonRespectes(
+      groupesProximite,
+      meilleurPlan,
+    );
+
+    for (const groupe of groupesEnErreur) {
+      const taille = groupe.eleveIds.length;
+
+      if (taille < 2 || taille > 3) {
+        continue;
+      }
+
+      const cibles = groupesDePlacesVoisines(meilleurPlan, taille);
+
+      for (const cible of cibles) {
+        let candidat = meilleurPlan.map(function (place) {
+          return { ...place };
+        });
+
+        let possible = true;
+
+        for (let index = 0; index < groupe.eleveIds.length; index++) {
+          const deplace = deplacerEleveVersPlaceParEchange(
+            candidat,
+            groupe.eleveIds[index],
+            cible[index].id,
+          );
+
+          if (!deplace) {
+            possible = false;
+            break;
+          }
+
+          candidat = deplace;
+        }
+
+        if (!possible) {
+          continue;
+        }
+
+        const score = scoreContraintesFortes(
+          candidat,
+          contraintes,
+          groupesProximite,
+        );
+
+        if (score < meilleurScore) {
+          meilleurPlan = candidat;
+          meilleurScore = score;
+          ameliorationPendantPasse = true;
+        }
+      }
+    }
+
+    // Quelques échanges ciblés supplémentaires peuvent résoudre une séparation
+    // sans casser les groupements déjà obtenus.
+    const placesModifiables = meilleurPlan.filter(function (place) {
+      return !place.verrouillee && place.eleveId !== null;
+    });
+
+    for (let essai = 0; essai < 300; essai++) {
+      if (placesModifiables.length < 2) {
+        break;
+      }
+
+      const place1 =
+        placesModifiables[Math.floor(Math.random() * placesModifiables.length)];
+      const place2 =
+        placesModifiables[Math.floor(Math.random() * placesModifiables.length)];
+
+      if (place1.id === place2.id) {
+        continue;
+      }
+
+      const candidat = echangerElevesEntrePlaces(
+        meilleurPlan,
+        place1.id,
+        place2.id,
+      );
+
+      const score = scoreContraintesFortes(
+        candidat,
+        contraintes,
+        groupesProximite,
+      );
+
+      if (score < meilleurScore) {
+        meilleurPlan = candidat;
+        meilleurScore = score;
+        ameliorationPendantPasse = true;
+      }
+    }
+
+    if (!ameliorationPendantPasse || meilleurScore === 0) {
+      break;
+    }
+  }
+
+  return meilleurPlan;
+}
+
 function genererMeilleurPlan(
   eleves: Eleve[],
   places: Place[],
@@ -1563,7 +1881,11 @@ function genererMeilleurPlan(
     return evaluation.mixtes > reference.mixtes;
   }
 
-  let meilleurPlan = genererCandidat(0);
+  let meilleurPlan = renforcerGroupementsEtSeparations(
+    genererCandidat(0),
+    contraintes,
+    groupesProximite,
+  );
 
   let meilleureEvaluation = evaluerPlan(
     eleves,
@@ -1582,7 +1904,11 @@ function genererMeilleurPlan(
   const nombreEssais = reglesFortesActives ? 2600 : 1400;
 
   for (let essai = 1; essai < nombreEssais; essai++) {
-    const candidat = genererCandidat(essai);
+    const candidat = renforcerGroupementsEtSeparations(
+      genererCandidat(essai),
+      contraintes,
+      groupesProximite,
+    );
 
     const evaluation = evaluerPlan(
       eleves,
@@ -5743,8 +6069,9 @@ export default function Home() {
 
                 <p className="mt-1 text-[11px] leading-snug text-indigo-700">
                   Priorité aux <strong>séparations</strong> et aux{" "}
-                  <strong>binômes / trinômes</strong>. Les autres règles sont
-                  optimisées ensuite.
+                  <strong>binômes / trinômes</strong>. Un groupement n’est validé
+                  que si les élèves sont voisins immédiats sur la même rangée.
+                  Les autres règles sont optimisées ensuite.
                 </p>
 
                 <label className="mt-2 flex cursor-pointer items-start gap-2 rounded-lg border border-indigo-200 bg-indigo-50/80 px-3 py-2 text-xs text-indigo-950">

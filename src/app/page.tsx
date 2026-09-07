@@ -1500,7 +1500,70 @@ function genererMeilleurPlan(
   elevesDevant: number[],
   binomesMixtesActifs: boolean,
 ): Place[] {
-  let meilleurPlan = genererPlanMixte(eleves, places, binomesMixtesActifs);
+  const reglesFortesActives =
+    contraintes.length > 0 || groupesProximite.length > 0;
+
+  /*
+    Les séparations et les groupements deviennent les règles prioritaires.
+
+    Pour éviter qu'une alternance fille/garçon ne réduise trop l'espace de
+    recherche, une partie des candidats est générée sans forcer l'alternance,
+    même si l'option "Binômes mixtes" est cochée. L'évaluation finale continue
+    toutefois de favoriser les plans mixtes parmi ceux qui respectent les
+    règles fortes.
+  */
+  function genererCandidat(numeroEssai: number): Place[] {
+    const utiliserMixtePourGeneration =
+      binomesMixtesActifs &&
+      (!reglesFortesActives || numeroEssai % 3 === 0);
+
+    return genererPlanMixte(
+      eleves,
+      places,
+      utiliserMixtePourGeneration,
+    );
+  }
+
+  function estMeilleureEvaluation(
+    evaluation: EvaluationPlan,
+    reference: EvaluationPlan,
+  ): boolean {
+    const violationsFortes =
+      evaluation.violationsSeparation + evaluation.violationsGroupement;
+
+    const violationsFortesReference =
+      reference.violationsSeparation + reference.violationsGroupement;
+
+    /*
+      Ordre de priorité :
+      1. minimiser le total séparations + groupements non respectés ;
+      2. à égalité, minimiser les séparations ;
+      3. puis les groupements ;
+      4. ensuite seulement "placer devant" ;
+      5. enfin maximiser les voisinages mixtes.
+    */
+    if (violationsFortes !== violationsFortesReference) {
+      return violationsFortes < violationsFortesReference;
+    }
+
+    if (evaluation.violationsSeparation !== reference.violationsSeparation) {
+      return (
+        evaluation.violationsSeparation < reference.violationsSeparation
+      );
+    }
+
+    if (evaluation.violationsGroupement !== reference.violationsGroupement) {
+      return evaluation.violationsGroupement < reference.violationsGroupement;
+    }
+
+    if (evaluation.violationsDevant !== reference.violationsDevant) {
+      return evaluation.violationsDevant < reference.violationsDevant;
+    }
+
+    return evaluation.mixtes > reference.mixtes;
+  }
+
+  let meilleurPlan = genererCandidat(0);
 
   let meilleureEvaluation = evaluerPlan(
     eleves,
@@ -1511,8 +1574,15 @@ function genererMeilleurPlan(
     binomesMixtesActifs,
   );
 
-  for (let essai = 1; essai < 1400; essai++) {
-    const candidat = genererPlanMixte(eleves, places, binomesMixtesActifs);
+  /*
+    Quelques essais supplémentaires lorsqu'il existe des règles fortes :
+    un trinôme ou plusieurs contraintes simultanées demandent naturellement
+    davantage de combinaisons qu'une simple alternance.
+  */
+  const nombreEssais = reglesFortesActives ? 2600 : 1400;
+
+  for (let essai = 1; essai < nombreEssais; essai++) {
+    const candidat = genererCandidat(essai);
 
     const evaluation = evaluerPlan(
       eleves,
@@ -1523,47 +1593,26 @@ function genererMeilleurPlan(
       binomesMixtesActifs,
     );
 
-    const meilleureSeparation =
-      evaluation.violationsSeparation <
-      meilleureEvaluation.violationsSeparation;
-
-    const meilleurGroupement =
-      evaluation.violationsSeparation ===
-        meilleureEvaluation.violationsSeparation &&
-      evaluation.violationsGroupement <
-        meilleureEvaluation.violationsGroupement;
-
-    const meilleurDevant =
-      evaluation.violationsSeparation ===
-        meilleureEvaluation.violationsSeparation &&
-      evaluation.violationsGroupement ===
-        meilleureEvaluation.violationsGroupement &&
-      evaluation.violationsDevant < meilleureEvaluation.violationsDevant;
-
-    const plusMixte =
-      evaluation.violationsSeparation ===
-        meilleureEvaluation.violationsSeparation &&
-      evaluation.violationsGroupement ===
-        meilleureEvaluation.violationsGroupement &&
-      evaluation.violationsDevant === meilleureEvaluation.violationsDevant &&
-      evaluation.mixtes > meilleureEvaluation.mixtes;
-
-    if (
-      meilleureSeparation ||
-      meilleurGroupement ||
-      meilleurDevant ||
-      plusMixte
-    ) {
+    if (estMeilleureEvaluation(evaluation, meilleureEvaluation)) {
       meilleurPlan = candidat;
       meilleureEvaluation = evaluation;
     }
 
-    if (
+    /*
+      On ne s'autorise un arrêt anticipé que lorsque toutes les règles
+      prioritaires sont déjà respectées. Les autres critères servent alors
+      seulement à départager les plans.
+    */
+    const reglesFortesRespectees =
       meilleureEvaluation.violationsSeparation === 0 &&
-      meilleureEvaluation.violationsGroupement === 0 &&
+      meilleureEvaluation.violationsGroupement === 0;
+
+    if (
+      reglesFortesRespectees &&
       meilleureEvaluation.violationsDevant === 0 &&
       (!binomesMixtesActifs ||
-        meilleureEvaluation.mixtes >= calculerScoreBinomes(eleves, meilleurPlan).possibles)
+        meilleureEvaluation.mixtes >=
+          calculerScoreBinomes(eleves, meilleurPlan).possibles)
     ) {
       break;
     }
@@ -5690,6 +5739,12 @@ export default function Home() {
 
                 <p className="mt-3 text-xs font-semibold text-indigo-900">
                   Règles prises en compte par ce bouton :
+                </p>
+
+                <p className="mt-1 text-[11px] leading-snug text-indigo-700">
+                  Priorité aux <strong>séparations</strong> et aux{" "}
+                  <strong>binômes / trinômes</strong>. Les autres règles sont
+                  optimisées ensuite.
                 </p>
 
                 <label className="mt-2 flex cursor-pointer items-start gap-2 rounded-lg border border-indigo-200 bg-indigo-50/80 px-3 py-2 text-xs text-indigo-950">
